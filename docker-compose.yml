@@ -1,0 +1,56 @@
+services:
+  gateway:
+    build: ./services/gateway
+    ports:
+      - "${GATEWAY_PORT:-3000}:3000"
+    environment:
+      - GATEWAY_PORT=3000
+      - CHECKER_URL=http://checker:8080
+      - ANALYTICS_URL=http://analytics:5000
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    depends_on:
+      checker:
+        condition: service_healthy
+      analytics:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  checker:
+    build: ./services/checker
+    ports:
+      - "${CHECKER_PORT:-8080}:8080"
+    environment:
+      - CHECKER_PORT=8080
+      - ANALYTICS_URL=http://analytics:5000
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    depends_on:
+      analytics:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+  analytics:
+    build: ./services/analytics
+    ports:
+      - "${ANALYTICS_PORT:-5000}:5000"
+    environment:
+      - ANALYTICS_PORT=5000
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
