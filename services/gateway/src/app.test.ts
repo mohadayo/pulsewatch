@@ -1,0 +1,162 @@
+import request from "supertest";
+import { app } from "./app";
+import http from "http";
+
+describe("Gateway Service", () => {
+  describe("GET /health", () => {
+    it("should return health status", async () => {
+      const res = await request(app).get("/health");
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe("ok");
+      expect(res.body.service).toBe("gateway");
+      expect(res.body.uptime_seconds).toBeGreaterThanOrEqual(0);
+    });
+  });
+
+  describe("POST /api/v1/endpoints", () => {
+    it("should reject missing url", async () => {
+      const res = await request(app)
+        .post("/api/v1/endpoints")
+        .send({ name: "test" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain("url");
+    });
+  });
+
+  describe("POST /api/v1/check", () => {
+    it("should reject missing url", async () => {
+      const res = await request(app)
+        .post("/api/v1/check")
+        .send({});
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain("url");
+    });
+  });
+
+  describe("GET /api/v1/status", () => {
+    it("should return degraded when services are down", async () => {
+      const res = await request(app).get("/api/v1/status");
+      expect(res.status).toBe(200);
+      expect(res.body.overall).toBe("degraded");
+      expect(res.body.services).toBeDefined();
+      expect(res.body.services.checker.healthy).toBe(false);
+      expect(res.body.services.analytics.healthy).toBe(false);
+    });
+  });
+
+  describe("proxy to checker service", () => {
+    let mockChecker: http.Server;
+    const originalEnv = process.env.CHECKER_URL;
+
+    beforeAll((done) => {
+      mockChecker = http
+        .createServer((req, res) => {
+          res.setHeader("Content-Type", "application/json");
+
+          if (req.method === "GET" && req.url === "/api/v1/endpoints") {
+            res.writeHead(200);
+            res.end(JSON.stringify({ endpoints: [], total: 0 }));
+          } else if (req.method === "POST" && req.url === "/api/v1/endpoints") {
+            let body = "";
+            req.on("data", (chunk) => (body += chunk));
+            req.on("end", () => {
+              const data = JSON.parse(body);
+              res.writeHead(201);
+              res.end(JSON.stringify(data));
+            });
+          } else if (req.method === "POST" && req.url === "/api/v1/check-all") {
+            res.writeHead(200);
+            res.end(JSON.stringify({ results: [], total: 0, reported: 0 }));
+          } else if (req.url === "/health") {
+            res.writeHead(200);
+            res.end(JSON.stringify({ status: "ok", service: "checker" }));
+          } else {
+            res.writeHead(404);
+            res.end(JSON.stringify({ error: "not found" }));
+          }
+        })
+        .listen(0, () => {
+          const addr = mockChecker.address();
+          if (addr && typeof addr !== "string") {
+            process.env.CHECKER_URL = `http://127.0.0.1:${addr.port}`;
+          }
+          done();
+        });
+    });
+
+    afterAll((done) => {
+      process.env.CHECKER_URL = originalEnv;
+      mockChecker.close(done);
+    });
+
+    it("should proxy GET /api/v1/endpoints", async () => {
+      const res = await request(app).get("/api/v1/endpoints");
+      expect(res.status).toBe(200);
+      expect(res.body.endpoints).toEqual([]);
+    });
+
+    it("should proxy POST /api/v1/endpoints", async () => {
+      const res = await request(app)
+        .post("/api/v1/endpoints")
+        .send({ url: "https://example.com", name: "Example" });
+      expect(res.status).toBe(201);
+      expect(res.body.url).toBe("https://example.com");
+    });
+
+    it("should proxy POST /api/v1/check-all", async () => {
+      const res = await request(app).post("/api/v1/check-all");
+      expect(res.status).toBe(200);
+      expect(res.body.results).toEqual([]);
+    });
+  });
+
+  describe("proxy to analytics service", () => {
+    let mockAnalytics: http.Server;
+    const originalEnv = process.env.ANALYTICS_URL;
+
+    beforeAll((done) => {
+      mockAnalytics = http
+        .createServer((req, res) => {
+          res.setHeader("Content-Type", "application/json");
+
+          if (req.method === "GET" && req.url?.startsWith("/api/v1/records")) {
+            res.writeHead(200);
+            res.end(JSON.stringify({ records: [], total: 0 }));
+          } else if (req.method === "GET" && req.url === "/api/v1/report") {
+            res.writeHead(200);
+            res.end(JSON.stringify({ endpoints: {} }));
+          } else if (req.url === "/health") {
+            res.writeHead(200);
+            res.end(JSON.stringify({ status: "ok", service: "analytics" }));
+          } else {
+            res.writeHead(404);
+            res.end(JSON.stringify({ error: "not found" }));
+          }
+        })
+        .listen(0, () => {
+          const addr = mockAnalytics.address();
+          if (addr && typeof addr !== "string") {
+            process.env.ANALYTICS_URL = `http://127.0.0.1:${addr.port}`;
+          }
+          done();
+        });
+    });
+
+    afterAll((done) => {
+      process.env.ANALYTICS_URL = originalEnv;
+      mockAnalytics.close(done);
+    });
+
+    it("should proxy GET /api/v1/records", async () => {
+      const res = await request(app).get("/api/v1/records");
+      expect(res.status).toBe(200);
+      expect(res.body.records).toEqual([]);
+    });
+
+    it("should proxy GET /api/v1/report", async () => {
+      const res = await request(app).get("/api/v1/report");
+      expect(res.status).toBe(200);
+      expect(res.body.endpoints).toEqual({});
+    });
+  });
+});

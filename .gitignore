@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+.pytest_cache/
+
+# Go
+services/checker/checker
+*.exe
+*.test
+*.out
+
+# TypeScript / Node
+node_modules/
+services/gateway/dist/
+*.js.map
+*.d.ts
+!jest.config.js
+!.eslintrc.json
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.docker/
+
+# Coverage
+htmlcov/
+.coverage
+coverage/
