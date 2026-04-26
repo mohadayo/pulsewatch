@@ -117,6 +117,45 @@ func addEndpointHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(ep)
 }
 
+func deleteEndpointHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	var body struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.URL == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "field 'url' is required"})
+		return
+	}
+
+	mu.Lock()
+	found := false
+	for i, ep := range endpoints {
+		if ep.URL == body.URL {
+			endpoints = append(endpoints[:i], endpoints[i+1:]...)
+			found = true
+			logger.Printf("Removed endpoint: %s (%s)", ep.Name, ep.URL)
+			break
+		}
+	}
+	mu.Unlock()
+
+	if !found {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{"error": "endpoint not found"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"message": "endpoint removed"})
+}
+
 // CheckEndpoint performs a health check on a single URL.
 func CheckEndpoint(url string) CheckResult {
 	start := time.Now()
@@ -241,6 +280,8 @@ func main() {
 			listEndpointsHandler(w, r)
 		case http.MethodPost:
 			addEndpointHandler(w, r)
+		case http.MethodDelete:
+			deleteEndpointHandler(w, r)
 		default:
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 		}

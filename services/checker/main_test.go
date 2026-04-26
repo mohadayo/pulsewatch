@@ -17,6 +17,8 @@ func setupTestMux() *http.ServeMux {
 			listEndpointsHandler(w, r)
 		case http.MethodPost:
 			addEndpointHandler(w, r)
+		case http.MethodDelete:
+			deleteEndpointHandler(w, r)
 		default:
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 		}
@@ -156,6 +158,107 @@ func TestListEndpoints(t *testing.T) {
 	}
 }
 
+func TestDeleteEndpoint(t *testing.T) {
+	ResetEndpoints()
+	mux := setupTestMux()
+
+	// Add an endpoint
+	addBody := `{"url":"https://delete-me.com","name":"DeleteMe"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/endpoints", bytes.NewBufferString(addBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201 on add, got %d", w.Code)
+	}
+
+	// Delete it
+	delBody := `{"url":"https://delete-me.com"}`
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/endpoints", bytes.NewBufferString(delBody))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 on delete, got %d", w.Code)
+	}
+
+	var result map[string]string
+	json.NewDecoder(w.Body).Decode(&result)
+	if result["message"] != "endpoint removed" {
+		t.Errorf("expected 'endpoint removed', got %s", result["message"])
+	}
+
+	eps := GetEndpoints()
+	if len(eps) != 0 {
+		t.Errorf("expected 0 endpoints after delete, got %d", len(eps))
+	}
+}
+
+func TestDeleteEndpointNotFound(t *testing.T) {
+	ResetEndpoints()
+	mux := setupTestMux()
+
+	body := `{"url":"https://nonexistent.com"}`
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/endpoints", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", w.Code)
+	}
+}
+
+func TestDeleteEndpointMissingURL(t *testing.T) {
+	ResetEndpoints()
+	mux := setupTestMux()
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/endpoints", bytes.NewBufferString(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestDeleteEndpointPreservesOthers(t *testing.T) {
+	ResetEndpoints()
+	mux := setupTestMux()
+
+	// Add three endpoints
+	for _, url := range []string{"https://a.com", "https://b.com", "https://c.com"} {
+		body := `{"url":"` + url + `"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/endpoints", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+	}
+
+	// Delete the middle one
+	delBody := `{"url":"https://b.com"}`
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/endpoints", bytes.NewBufferString(delBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	eps := GetEndpoints()
+	if len(eps) != 2 {
+		t.Fatalf("expected 2 endpoints, got %d", len(eps))
+	}
+	for _, ep := range eps {
+		if ep.URL == "https://b.com" {
+			t.Error("deleted endpoint should not be present")
+		}
+	}
+}
+
 func TestCheckSingleMissingURL(t *testing.T) {
 	mux := setupTestMux()
 
@@ -291,7 +394,7 @@ func TestCheckEndpointUnreachable(t *testing.T) {
 
 func TestEndpointsMethodNotAllowed(t *testing.T) {
 	mux := setupTestMux()
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/endpoints", nil)
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/endpoints", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
