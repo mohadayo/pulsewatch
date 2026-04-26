@@ -23,6 +23,16 @@ describe("Gateway Service", () => {
     });
   });
 
+  describe("DELETE /api/v1/endpoints", () => {
+    it("should reject missing url", async () => {
+      const res = await request(app)
+        .delete("/api/v1/endpoints")
+        .send({});
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain("url");
+    });
+  });
+
   describe("POST /api/v1/check", () => {
     it("should reject missing url", async () => {
       const res = await request(app)
@@ -64,6 +74,19 @@ describe("Gateway Service", () => {
               res.writeHead(201);
               res.end(JSON.stringify(data));
             });
+          } else if (req.method === "DELETE" && req.url === "/api/v1/endpoints") {
+            let body = "";
+            req.on("data", (chunk) => (body += chunk));
+            req.on("end", () => {
+              const data = JSON.parse(body);
+              if (data.url === "https://exists.com") {
+                res.writeHead(200);
+                res.end(JSON.stringify({ message: "endpoint removed" }));
+              } else {
+                res.writeHead(404);
+                res.end(JSON.stringify({ error: "endpoint not found" }));
+              }
+            });
           } else if (req.method === "POST" && req.url === "/api/v1/check-all") {
             res.writeHead(200);
             res.end(JSON.stringify({ results: [], total: 0, reported: 0 }));
@@ -101,6 +124,22 @@ describe("Gateway Service", () => {
         .send({ url: "https://example.com", name: "Example" });
       expect(res.status).toBe(201);
       expect(res.body.url).toBe("https://example.com");
+    });
+
+    it("should proxy DELETE /api/v1/endpoints (success)", async () => {
+      const res = await request(app)
+        .delete("/api/v1/endpoints")
+        .send({ url: "https://exists.com" });
+      expect(res.status).toBe(200);
+      expect(res.body.message).toBe("endpoint removed");
+    });
+
+    it("should proxy DELETE /api/v1/endpoints (not found)", async () => {
+      const res = await request(app)
+        .delete("/api/v1/endpoints")
+        .send({ url: "https://nonexistent.com" });
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe("endpoint not found");
     });
 
     it("should proxy POST /api/v1/check-all", async () => {
