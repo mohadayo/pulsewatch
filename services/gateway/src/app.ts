@@ -96,6 +96,20 @@ app.post("/api/v1/endpoints", async (req: Request, res: Response, next: NextFunc
   }
 });
 
+app.delete("/api/v1/endpoints", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.body.url) {
+      res.status(400).json({ error: "Field 'url' is required" });
+      return;
+    }
+    const result = await proxyRequest(checkerUrl(), "/api/v1/endpoints", "DELETE", req.body);
+    logger.info(`Removed endpoint: ${req.body.url}`);
+    res.status(result.status).json(result.data);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Health check operations - proxy to checker
 app.post("/api/v1/check", async (req: Request, res: Response, next: NextFunction) => {
   try {
