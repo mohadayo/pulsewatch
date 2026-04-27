@@ -46,12 +46,25 @@ def add_record():
     if response_time_ms is None:
         return jsonify({"error": "Field 'response_time_ms' is required"}), 400
 
+    try:
+        status_code = int(status_code)
+    except (ValueError, TypeError):
+        return jsonify({"error": "Field 'status_code' must be an integer"}), 400
+
+    try:
+        response_time_ms = float(response_time_ms)
+    except (ValueError, TypeError):
+        return jsonify({"error": "Field 'response_time_ms' must be a number"}), 400
+
+    if response_time_ms < 0:
+        return jsonify({"error": "Field 'response_time_ms' must be non-negative"}), 400
+
     record = {
         "endpoint": endpoint,
-        "status_code": int(status_code),
-        "response_time_ms": float(response_time_ms),
+        "status_code": status_code,
+        "response_time_ms": response_time_ms,
         "checked_at": data.get("checked_at", datetime.now(timezone.utc).isoformat()),
-        "healthy": 200 <= int(status_code) < 400,
+        "healthy": 200 <= status_code < 400,
     }
     health_records.append(record)
     logger.info(
