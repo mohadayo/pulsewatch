@@ -64,6 +64,36 @@ def test_add_record_empty_body(client):
     assert resp.status_code == 400
 
 
+def test_add_record_negative_response_time(client):
+    payload = {"endpoint": "https://example.com", "status_code": 200, "response_time_ms": -5.0}
+    resp = client.post("/api/v1/records", json=payload)
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert "non-negative" in data["error"]
+
+
+def test_add_record_zero_response_time(client):
+    payload = {"endpoint": "https://example.com", "status_code": 200, "response_time_ms": 0}
+    resp = client.post("/api/v1/records", json=payload)
+    assert resp.status_code == 201
+
+
+def test_add_record_invalid_status_code(client):
+    payload = {"endpoint": "https://example.com", "status_code": "abc", "response_time_ms": 10}
+    resp = client.post("/api/v1/records", json=payload)
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert "integer" in data["error"]
+
+
+def test_add_record_invalid_response_time(client):
+    payload = {"endpoint": "https://example.com", "status_code": 200, "response_time_ms": "fast"}
+    resp = client.post("/api/v1/records", json=payload)
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert "number" in data["error"]
+
+
 def test_list_records(client):
     for i in range(3):
         client.post("/api/v1/records", json={
