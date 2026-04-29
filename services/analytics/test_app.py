@@ -125,6 +125,63 @@ def test_list_records_with_limit(client):
     assert len(data["records"]) == 2
 
 
+def test_delete_records_success(client):
+    client.post("/api/v1/records", json={"endpoint": "https://del.com", "status_code": 200, "response_time_ms": 10})
+    client.post("/api/v1/records", json={"endpoint": "https://del.com", "status_code": 200, "response_time_ms": 20})
+    client.post("/api/v1/records", json={"endpoint": "https://keep.com", "status_code": 200, "response_time_ms": 30})
+
+    resp = client.delete("/api/v1/records?endpoint=https://del.com")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["message"] == "Records deleted"
+    assert data["deleted_count"] == 2
+
+    list_resp = client.get("/api/v1/records")
+    assert list_resp.get_json()["total"] == 1
+
+
+def test_delete_records_not_found(client):
+    resp = client.delete("/api/v1/records?endpoint=https://nonexistent.com")
+    assert resp.status_code == 404
+    data = resp.get_json()
+    assert "No records found" in data["error"]
+
+
+def test_delete_records_missing_param(client):
+    resp = client.delete("/api/v1/records")
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert "endpoint" in data["error"].lower()
+
+
+def test_delete_records_preserves_other_endpoints(client):
+    client.post("/api/v1/records", json={"endpoint": "https://a.com", "status_code": 200, "response_time_ms": 10})
+    client.post("/api/v1/records", json={"endpoint": "https://b.com", "status_code": 200, "response_time_ms": 20})
+    client.post("/api/v1/records", json={"endpoint": "https://c.com", "status_code": 200, "response_time_ms": 30})
+
+    client.delete("/api/v1/records?endpoint=https://b.com")
+
+    list_resp = client.get("/api/v1/records")
+    data = list_resp.get_json()
+    assert data["total"] == 2
+    endpoints = [r["endpoint"] for r in data["records"]]
+    assert "https://b.com" not in endpoints
+    assert "https://a.com" in endpoints
+    assert "https://c.com" in endpoints
+
+
+def test_delete_records_updates_report(client):
+    client.post("/api/v1/records", json={"endpoint": "https://x.com", "status_code": 200, "response_time_ms": 50})
+    client.post("/api/v1/records", json={"endpoint": "https://y.com", "status_code": 200, "response_time_ms": 100})
+
+    client.delete("/api/v1/records?endpoint=https://x.com")
+
+    report_resp = client.get("/api/v1/report")
+    data = report_resp.get_json()
+    assert "https://x.com" not in data["endpoints"]
+    assert "https://y.com" in data["endpoints"]
+
+
 def test_report_empty(client):
     resp = client.get("/api/v1/report")
     assert resp.status_code == 200

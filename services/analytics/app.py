@@ -88,6 +88,25 @@ def list_records():
     return jsonify({"records": result, "total": len(filtered)})
 
 
+@app.route("/api/v1/records", methods=["DELETE"])
+def delete_records():
+    endpoint = request.args.get("endpoint")
+    if not endpoint:
+        logger.warning("Delete request missing endpoint parameter")
+        return jsonify({"error": "Query parameter 'endpoint' is required"}), 400
+
+    before_count = len(health_records)
+    health_records[:] = [r for r in health_records if r["endpoint"] != endpoint]
+    deleted_count = before_count - len(health_records)
+
+    if deleted_count == 0:
+        logger.info("No records found for deletion: %s", endpoint)
+        return jsonify({"error": "No records found for the specified endpoint"}), 404
+
+    logger.info("Deleted %d records for endpoint=%s", deleted_count, endpoint)
+    return jsonify({"message": "Records deleted", "deleted_count": deleted_count})
+
+
 @app.route("/api/v1/report", methods=["GET"])
 def report():
     if not health_records:
