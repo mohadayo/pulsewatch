@@ -198,4 +198,41 @@ describe("Gateway Service", () => {
       expect(res.body.endpoints).toEqual({});
     });
   });
+
+  describe("proxy timeout", () => {
+    let slowServer: http.Server;
+    const originalEnv = process.env.CHECKER_URL;
+    const originalTimeout = process.env.PROXY_TIMEOUT_MS;
+
+    beforeAll((done) => {
+      process.env.PROXY_TIMEOUT_MS = "200";
+      slowServer = http
+        .createServer((_req, res) => {
+          setTimeout(() => {
+            res.setHeader("Content-Type", "application/json");
+            res.writeHead(200);
+            res.end(JSON.stringify({ endpoints: [], total: 0 }));
+          }, 2000);
+        })
+        .listen(0, () => {
+          const addr = slowServer.address();
+          if (addr && typeof addr !== "string") {
+            process.env.CHECKER_URL = `http://127.0.0.1:${addr.port}`;
+          }
+          done();
+        });
+    });
+
+    afterAll((done) => {
+      process.env.CHECKER_URL = originalEnv;
+      process.env.PROXY_TIMEOUT_MS = originalTimeout;
+      slowServer.close(done);
+    });
+
+    it("should return 504 when upstream times out", async () => {
+      const res = await request(app).get("/api/v1/endpoints");
+      expect(res.status).toBe(504);
+      expect(res.body.error).toBe("Gateway timeout");
+    }, 10000);
+  });
 });

@@ -9,6 +9,9 @@ function checkerUrl(): string {
 function analyticsUrl(): string {
   return process.env.ANALYTICS_URL || "http://localhost:5000";
 }
+function proxyTimeoutMs(): number {
+  return parseInt(process.env.PROXY_TIMEOUT_MS || "10000", 10);
+}
 const startTime = Date.now();
 
 const logger = {
@@ -27,17 +30,25 @@ async function proxyRequest(
   body?: unknown
 ): Promise<{ status: number; data: unknown }> {
   const url = `${baseUrl}${path}`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), proxyTimeoutMs());
+
   const options: RequestInit = {
     method,
     headers: { "Content-Type": "application/json" },
+    signal: controller.signal,
   };
   if (body && method !== "GET") {
     options.body = JSON.stringify(body);
   }
 
-  const response = await fetch(url, options);
-  const data = await response.json();
-  return { status: response.status, data };
+  try {
+    const response = await fetch(url, options);
+    const data = await response.json();
+    return { status: response.status, data };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 // Health check
@@ -156,6 +167,11 @@ app.get("/api/v1/report", async (_req: Request, res: Response, next: NextFunctio
 
 // Error handler
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
+  if (err.name === "AbortError") {
+    logger.error(`Proxy timeout: ${err.message}`);
+    res.status(504).json({ error: "Gateway timeout", message: "Upstream service did not respond in time" });
+    return;
+  }
   logger.error(`Unhandled error: ${err.message}`);
   res.status(502).json({ error: "Service unavailable", message: err.message });
 });
