@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func setupTestMux() *http.ServeMux {
@@ -433,5 +434,66 @@ func TestFormatAddr(t *testing.T) {
 	addr := FormatAddr("0.0.0.0", 8080)
 	if addr != "0.0.0.0:8080" {
 		t.Errorf("expected 0.0.0.0:8080, got %s", addr)
+	}
+}
+
+func TestReportToAnalyticsSuccess(t *testing.T) {
+	mockAnalytics := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/records" {
+			t.Errorf("expected path /api/v1/records, got %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer mockAnalytics.Close()
+
+	oldURL := GetAnalyticsURL()
+	SetAnalyticsURL(mockAnalytics.URL)
+	defer SetAnalyticsURL(oldURL)
+
+	result := CheckResult{
+		Endpoint:       "https://example.com",
+		StatusCode:     200,
+		ResponseTimeMs: 42.5,
+		CheckedAt:      "2026-01-01T00:00:00Z",
+	}
+	if !reportToAnalytics(result) {
+		t.Error("expected reportToAnalytics to return true")
+	}
+}
+
+func TestReportToAnalyticsUnreachable(t *testing.T) {
+	oldURL := GetAnalyticsURL()
+	SetAnalyticsURL("http://localhost:19999")
+	defer SetAnalyticsURL(oldURL)
+
+	result := CheckResult{
+		Endpoint:   "https://example.com",
+		StatusCode: 200,
+	}
+	if reportToAnalytics(result) {
+		t.Error("expected reportToAnalytics to return false for unreachable server")
+	}
+}
+
+func TestReportToAnalyticsTimeout(t *testing.T) {
+	slowServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer slowServer.Close()
+
+	oldURL := GetAnalyticsURL()
+	SetAnalyticsURL(slowServer.URL)
+	defer SetAnalyticsURL(oldURL)
+
+	SetReportTimeout(50 * time.Millisecond)
+	defer SetReportTimeout(5 * time.Second)
+
+	result := CheckResult{
+		Endpoint:   "https://example.com",
+		StatusCode: 200,
+	}
+	if reportToAnalytics(result) {
+		t.Error("expected reportToAnalytics to return false due to timeout")
 	}
 }
