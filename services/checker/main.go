@@ -22,6 +22,8 @@ var (
 
 	mu        sync.RWMutex
 	endpoints []Endpoint
+
+	reportTimeout = 5 * time.Second
 )
 
 // Endpoint represents a monitored URL.
@@ -240,7 +242,8 @@ func reportToAnalytics(result CheckResult) bool {
 	}
 	body, _ := json.Marshal(payload)
 
-	resp, err := http.Post(analyticsURL+"/api/v1/records", "application/json", bytes.NewReader(body))
+	client := &http.Client{Timeout: reportTimeout}
+	resp, err := client.Post(analyticsURL+"/api/v1/records", "application/json", bytes.NewReader(body))
 	if err != nil {
 		logger.Printf("Failed to report to analytics: %v", err)
 		return false
@@ -330,6 +333,11 @@ func GetAnalyticsURL() string {
 // SetAnalyticsURL sets the analytics URL (for testing).
 func SetAnalyticsURL(u string) {
 	analyticsURL = u
+}
+
+// SetReportTimeout sets the report timeout (for testing).
+func SetReportTimeout(d time.Duration) {
+	reportTimeout = d
 }
 
 // ParsePort converts port string to int safely.
