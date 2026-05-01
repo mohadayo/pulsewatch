@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"sync"
@@ -104,11 +105,29 @@ func addEndpointHandler(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"error": "field 'url' is required"})
 		return
 	}
+
+	parsed, err := url.ParseRequestURI(ep.URL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "field 'url' must be a valid HTTP or HTTPS URL"})
+		return
+	}
+
 	if ep.Name == "" {
 		ep.Name = ep.URL
 	}
 
 	mu.Lock()
+	for _, existing := range endpoints {
+		if existing.URL == ep.URL {
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(map[string]string{"error": "endpoint already registered"})
+			return
+		}
+	}
 	endpoints = append(endpoints, ep)
 	mu.Unlock()
 
