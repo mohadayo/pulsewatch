@@ -260,6 +260,72 @@ func TestDeleteEndpointPreservesOthers(t *testing.T) {
 	}
 }
 
+func TestAddEndpointInvalidURL(t *testing.T) {
+	ResetEndpoints()
+	mux := setupTestMux()
+
+	body := `{"url":"not-a-url"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/endpoints", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+
+	var result map[string]string
+	json.NewDecoder(w.Body).Decode(&result)
+	if result["error"] != "field 'url' must be a valid HTTP or HTTPS URL" {
+		t.Errorf("unexpected error: %s", result["error"])
+	}
+}
+
+func TestAddEndpointDuplicate(t *testing.T) {
+	ResetEndpoints()
+	mux := setupTestMux()
+
+	body := `{"url":"https://example.com","name":"Example"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/endpoints", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", w.Code)
+	}
+
+	// Try adding the same URL again
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/endpoints", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for duplicate, got %d", w.Code)
+	}
+
+	eps := GetEndpoints()
+	if len(eps) != 1 {
+		t.Errorf("expected 1 endpoint, got %d", len(eps))
+	}
+}
+
+func TestAddEndpointFTPScheme(t *testing.T) {
+	ResetEndpoints()
+	mux := setupTestMux()
+
+	body := `{"url":"ftp://files.example.com/data"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/endpoints", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for ftp URL, got %d", w.Code)
+	}
+}
+
 func TestCheckSingleMissingURL(t *testing.T) {
 	mux := setupTestMux()
 
