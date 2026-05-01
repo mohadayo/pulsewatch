@@ -5,7 +5,7 @@ test: test-python test-go test-ts
 
 ## Run Python tests
 test-python:
-	cd services/analytics && pip install -q -r requirements.txt && pytest -v
+	cd services/analytics && pip install -q -r requirements-dev.txt && pytest -v
 
 ## Run Go tests
 test-go:
@@ -20,7 +20,7 @@ lint: lint-python lint-go lint-ts
 
 ## Lint Python
 lint-python:
-	cd services/analytics && pip install -q -r requirements.txt && flake8 --max-line-length=120 app.py
+	cd services/analytics && pip install -q -r requirements-dev.txt && flake8 --max-line-length=120 app.py
 
 ## Lint Go
 lint-go:
