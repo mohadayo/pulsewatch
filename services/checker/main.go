@@ -287,6 +287,14 @@ func checkSingleHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	parsed, err := url.ParseRequestURI(body.URL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "field 'url' must be a valid HTTP or HTTPS URL"})
+		return
+	}
+
 	result := CheckEndpoint(body.URL)
 
 	w.Header().Set("Content-Type", "application/json")

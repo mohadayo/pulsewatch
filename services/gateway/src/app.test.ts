@@ -161,6 +161,19 @@ describe("Gateway Service", () => {
           if (req.method === "GET" && req.url?.startsWith("/api/v1/records")) {
             res.writeHead(200);
             res.end(JSON.stringify({ records: [], total: 0 }));
+          } else if (req.method === "DELETE" && req.url === "/api/v1/records") {
+            let body = "";
+            req.on("data", (chunk) => (body += chunk));
+            req.on("end", () => {
+              const data = JSON.parse(body);
+              if (data.endpoint === "https://example.com") {
+                res.writeHead(200);
+                res.end(JSON.stringify({ message: "deleted", deleted: 3 }));
+              } else {
+                res.writeHead(200);
+                res.end(JSON.stringify({ message: "deleted", deleted: 0 }));
+              }
+            });
           } else if (req.method === "GET" && req.url === "/api/v1/report") {
             res.writeHead(200);
             res.end(JSON.stringify({ endpoints: {} }));
@@ -190,6 +203,28 @@ describe("Gateway Service", () => {
       const res = await request(app).get("/api/v1/records");
       expect(res.status).toBe(200);
       expect(res.body.records).toEqual([]);
+    });
+
+    it("should proxy GET /api/v1/records with query params", async () => {
+      const res = await request(app).get("/api/v1/records?endpoint=test&limit=5");
+      expect(res.status).toBe(200);
+      expect(res.body.records).toEqual([]);
+    });
+
+    it("should reject DELETE /api/v1/records without endpoint", async () => {
+      const res = await request(app)
+        .delete("/api/v1/records")
+        .send({});
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain("endpoint");
+    });
+
+    it("should proxy DELETE /api/v1/records", async () => {
+      const res = await request(app)
+        .delete("/api/v1/records")
+        .send({ endpoint: "https://example.com" });
+      expect(res.status).toBe(200);
+      expect(res.body.deleted).toBe(3);
     });
 
     it("should proxy GET /api/v1/report", async () => {

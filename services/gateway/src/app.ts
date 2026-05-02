@@ -156,6 +156,20 @@ app.get("/api/v1/records", async (req: Request, res: Response, next: NextFunctio
   }
 });
 
+app.delete("/api/v1/records", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.body.endpoint) {
+      res.status(400).json({ error: "Field 'endpoint' is required" });
+      return;
+    }
+    const result = await proxyRequest(analyticsUrl(), "/api/v1/records", "DELETE", req.body);
+    logger.info(`Deleted records for endpoint: ${req.body.endpoint}`);
+    res.status(result.status).json(result.data);
+  } catch (err) {
+    next(err);
+  }
+});
+
 app.get("/api/v1/report", async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const result = await proxyRequest(analyticsUrl(), "/api/v1/report", "GET");
