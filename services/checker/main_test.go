@@ -339,6 +339,134 @@ func TestCheckSingleMissingURL(t *testing.T) {
 	}
 }
 
+func TestCheckSingleInvalidURL(t *testing.T) {
+	mux := setupTestMux()
+
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{"not a URL", "not-a-url"},
+		{"FTP scheme", "ftp://files.example.com/data"},
+		{"missing host", "http://"},
+		{"file scheme", "file:///etc/passwd"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			body := `{"url":"` + tc.url + `"}`
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/check", bytes.NewBufferString(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, req)
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400 for %q, got %d", tc.url, w.Code)
+			}
+
+			var result map[string]string
+			json.NewDecoder(w.Body).Decode(&result)
+			if result["error"] != "field 'url' must be a valid HTTP or HTTPS URL" {
+				t.Errorf("unexpected error: %s", result["error"])
+			}
+		})
+	}
+}
+
+func TestCheckAllMultipleEndpoints(t *testing.T) {
+	ResetEndpoints()
+
+	mockTarget1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer mockTarget1.Close()
+
+	mockTarget2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer mockTarget2.Close()
+
+	mockAnalytics := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer mockAnalytics.Close()
+
+	SetAnalyticsURL(mockAnalytics.URL)
+	defer SetAnalyticsURL("http://localhost:5000")
+
+	mux := setupTestMux()
+
+	for _, u := range []string{mockTarget1.URL, mockTarget2.URL} {
+		body := `{"url":"` + u + `"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/endpoints", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("expected 201, got %d", w.Code)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/check-all", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var result map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&result)
+	total := int(result["total"].(float64))
+	if total != 2 {
+		t.Errorf("expected 2 results, got %d", total)
+	}
+	reported := int(result["reported"].(float64))
+	if reported != 2 {
+		t.Errorf("expected 2 reported, got %d", reported)
+	}
+}
+
+func TestCheckAllAnalyticsNon201(t *testing.T) {
+	ResetEndpoints()
+
+	mockTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer mockTarget.Close()
+
+	mockAnalytics := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer mockAnalytics.Close()
+
+	SetAnalyticsURL(mockAnalytics.URL)
+	defer SetAnalyticsURL("http://localhost:5000")
+
+	mux := setupTestMux()
+
+	body := `{"url":"` + mockTarget.URL + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/endpoints", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/check-all", nil)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var result map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&result)
+	reported := int(result["reported"].(float64))
+	if reported != 0 {
+		t.Errorf("expected 0 reported when analytics returns 500, got %d", reported)
+	}
+}
+
 func TestCheckSingleWithMockServer(t *testing.T) {
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
