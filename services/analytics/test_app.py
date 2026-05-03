@@ -203,3 +203,48 @@ def test_report_with_data(client):
     assert ep["avg_response_time_ms"] == pytest.approx(116.67, abs=0.01)
     assert ep["min_response_time_ms"] == 50.0
     assert ep["max_response_time_ms"] == 200.0
+
+
+def test_records_store_max_capacity(client, monkeypatch):
+    monkeypatch.setattr("app.MAX_RECORDS", 3)
+    for i in range(5):
+        client.post("/api/v1/records", json={
+            "endpoint": f"https://ep-{i}.com",
+            "status_code": 200,
+            "response_time_ms": 10 + i,
+        })
+    resp = client.get("/api/v1/records")
+    data = resp.get_json()
+    assert data["total"] == 3
+    endpoints = [r["endpoint"] for r in data["records"]]
+    assert "https://ep-0.com" not in endpoints
+    assert "https://ep-1.com" not in endpoints
+    assert "https://ep-4.com" in endpoints
+
+
+def test_records_store_within_capacity(client, monkeypatch):
+    monkeypatch.setattr("app.MAX_RECORDS", 10)
+    for i in range(3):
+        client.post("/api/v1/records", json={
+            "endpoint": f"https://ep-{i}.com",
+            "status_code": 200,
+            "response_time_ms": 10,
+        })
+    resp = client.get("/api/v1/records")
+    data = resp.get_json()
+    assert data["total"] == 3
+
+
+def test_records_store_eviction_preserves_order(client, monkeypatch):
+    monkeypatch.setattr("app.MAX_RECORDS", 2)
+    for i in range(4):
+        client.post("/api/v1/records", json={
+            "endpoint": f"https://ep-{i}.com",
+            "status_code": 200,
+            "response_time_ms": float(i),
+        })
+    resp = client.get("/api/v1/records")
+    data = resp.get_json()
+    assert data["total"] == 2
+    assert data["records"][0]["endpoint"] == "https://ep-2.com"
+    assert data["records"][1]["endpoint"] == "https://ep-3.com"
