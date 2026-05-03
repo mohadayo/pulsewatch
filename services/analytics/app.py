@@ -16,6 +16,7 @@ logging.basicConfig(
 logger = logging.getLogger("analytics")
 
 PORT = int(os.environ.get("ANALYTICS_PORT", 5000))
+MAX_RECORDS = int(os.environ.get("MAX_RECORDS", "10000"))
 
 # In-memory store for health check results
 health_records: list[dict] = []
@@ -67,6 +68,12 @@ def add_record():
         "healthy": 200 <= status_code < 400,
     }
     health_records.append(record)
+
+    if len(health_records) > MAX_RECORDS:
+        removed = len(health_records) - MAX_RECORDS
+        del health_records[:removed]
+        logger.info("Evicted %d old records (store capped at %d)", removed, MAX_RECORDS)
+
     logger.info(
         "Recorded health check for %s: status=%d, time=%.1fms",
         endpoint, record["status_code"], record["response_time_ms"]
