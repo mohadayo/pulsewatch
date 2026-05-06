@@ -25,6 +25,12 @@ var (
 	endpoints []Endpoint
 
 	reportTimeout = 5 * time.Second
+
+	readHeaderTimeout time.Duration
+	readTimeout       time.Duration
+	writeTimeout      time.Duration
+	idleTimeout       time.Duration
+	maxBodyBytes      int64
 )
 
 // Endpoint represents a monitored URL.
@@ -54,6 +60,12 @@ func init() {
 	port = getEnv("CHECKER_PORT", "8080")
 	analyticsURL = getEnv("ANALYTICS_URL", "http://localhost:5000")
 	startTime = time.Now()
+
+	readHeaderTimeout = envSeconds("CHECKER_READ_HEADER_TIMEOUT", 5*time.Second)
+	readTimeout = envSeconds("CHECKER_READ_TIMEOUT", 15*time.Second)
+	writeTimeout = envSeconds("CHECKER_WRITE_TIMEOUT", 20*time.Second)
+	idleTimeout = envSeconds("CHECKER_IDLE_TIMEOUT", 60*time.Second)
+	maxBodyBytes = envBytes("CHECKER_MAX_BODY_BYTES", 32*1024)
 }
 
 func getEnv(key, fallback string) string {
@@ -61,6 +73,42 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func envSeconds(key string, fallback time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return fallback
+}
+
+func envBytes(key string, fallback int64) int64 {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+	return fallback
+}
+
+func writeJSONError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst interface{}) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	if err := dec.Decode(dst); err != nil {
+		if err.Error() == "http: request body too large" {
+			writeJSONError(w, http.StatusRequestEntityTooLarge, "request body too large")
+		}
+		return err
+	}
+	return nil
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
@@ -92,10 +140,11 @@ func addEndpointHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var ep Endpoint
-	if err := json.NewDecoder(r.Body).Decode(&ep); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "invalid JSON body"})
+	if err := decodeJSONBody(w, r, &ep); err != nil {
+		if err.Error() == "http: request body too large" {
+			return
+		}
+		writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
 
@@ -147,10 +196,15 @@ func deleteEndpointHandler(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		URL string `json:"url"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.URL == "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "field 'url' is required"})
+	if err := decodeJSONBody(w, r, &body); err != nil {
+		if err.Error() == "http: request body too large" {
+			return
+		}
+		writeJSONError(w, http.StatusBadRequest, "field 'url' is required")
+		return
+	}
+	if body.URL == "" {
+		writeJSONError(w, http.StatusBadRequest, "field 'url' is required")
 		return
 	}
 
@@ -280,10 +334,15 @@ func checkSingleHandler(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		URL string `json:"url"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.URL == "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "field 'url' is required"})
+	if err := decodeJSONBody(w, r, &body); err != nil {
+		if err.Error() == "http: request body too large" {
+			return
+		}
+		writeJSONError(w, http.StatusBadRequest, "field 'url' is required")
+		return
+	}
+	if body.URL == "" {
+		writeJSONError(w, http.StatusBadRequest, "field 'url' is required")
 		return
 	}
 
@@ -320,8 +379,16 @@ func main() {
 	mux.HandleFunc("/api/v1/check-all", checkAllHandler)
 
 	addr := ":" + port
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
+	}
 	logger.Printf("Starting Checker Service on %s", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		logger.Fatalf("Server failed: %v", err)
 	}
 }
@@ -365,6 +432,16 @@ func SetAnalyticsURL(u string) {
 // SetReportTimeout sets the report timeout (for testing).
 func SetReportTimeout(d time.Duration) {
 	reportTimeout = d
+}
+
+// SetMaxBodyBytes sets the request body size limit (for testing).
+func SetMaxBodyBytes(n int64) {
+	maxBodyBytes = n
+}
+
+// GetMaxBodyBytes returns the request body size limit (for testing).
+func GetMaxBodyBytes() int64 {
+	return maxBodyBytes
 }
 
 // ParsePort converts port string to int safely.
