@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -666,6 +667,94 @@ func TestReportToAnalyticsUnreachable(t *testing.T) {
 	}
 	if reportToAnalytics(result) {
 		t.Error("expected reportToAnalytics to return false for unreachable server")
+	}
+}
+
+func TestAddEndpointBodyTooLarge(t *testing.T) {
+	ResetEndpoints()
+	old := GetMaxBodyBytes()
+	SetMaxBodyBytes(64)
+	defer SetMaxBodyBytes(old)
+
+	largeName := strings.Repeat("a", 256)
+	body := []byte(`{"url":"http://x","name":"` + largeName + `"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/endpoints", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	addEndpointHandler(w, req)
+
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d", w.Code)
+	}
+	var resp map[string]string
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["error"] != "request body too large" {
+		t.Errorf("expected error 'request body too large', got %q", resp["error"])
+	}
+}
+
+func TestDeleteEndpointBodyTooLarge(t *testing.T) {
+	ResetEndpoints()
+	old := GetMaxBodyBytes()
+	SetMaxBodyBytes(32)
+	defer SetMaxBodyBytes(old)
+
+	body := []byte(`{"url":"http://example.com/` + strings.Repeat("p", 256) + `"}`)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/endpoints", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	deleteEndpointHandler(w, req)
+
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d", w.Code)
+	}
+}
+
+func TestCheckSingleBodyTooLarge(t *testing.T) {
+	old := GetMaxBodyBytes()
+	SetMaxBodyBytes(32)
+	defer SetMaxBodyBytes(old)
+
+	body := []byte(`{"url":"http://example.com/` + strings.Repeat("p", 256) + `"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/check", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	checkSingleHandler(w, req)
+
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d", w.Code)
+	}
+}
+
+func TestEnvSecondsFallbackAndOverride(t *testing.T) {
+	const key = "TEST_CHECKER_ENV_SECONDS_X"
+	t.Setenv(key, "")
+	if got := envSeconds(key, 7*time.Second); got != 7*time.Second {
+		t.Fatalf("expected fallback 7s, got %v", got)
+	}
+	t.Setenv(key, "13")
+	if got := envSeconds(key, 7*time.Second); got != 13*time.Second {
+		t.Fatalf("expected 13s, got %v", got)
+	}
+	t.Setenv(key, "garbage")
+	if got := envSeconds(key, 7*time.Second); got != 7*time.Second {
+		t.Fatalf("expected fallback for invalid, got %v", got)
+	}
+}
+
+func TestEnvBytesFallbackAndOverride(t *testing.T) {
+	const key = "TEST_CHECKER_ENV_BYTES_X"
+	t.Setenv(key, "")
+	if got := envBytes(key, 1024); got != 1024 {
+		t.Fatalf("expected fallback 1024, got %d", got)
+	}
+	t.Setenv(key, "2048")
+	if got := envBytes(key, 1024); got != 2048 {
+		t.Fatalf("expected 2048, got %d", got)
+	}
+	t.Setenv(key, "-5")
+	if got := envBytes(key, 1024); got != 1024 {
+		t.Fatalf("expected fallback for negative, got %d", got)
 	}
 }
 
