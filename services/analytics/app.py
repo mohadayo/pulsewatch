@@ -1,6 +1,7 @@
 """PulseWatch Analytics Service - Processes health check data and generates reports."""
 
 import logging
+import math
 import os
 import time
 from datetime import datetime, timezone
@@ -17,6 +18,10 @@ logger = logging.getLogger("analytics")
 
 PORT = int(os.environ.get("ANALYTICS_PORT", 5000))
 MAX_RECORDS = int(os.environ.get("MAX_RECORDS", "10000"))
+MAX_ENDPOINT_LENGTH = int(os.environ.get("MAX_ENDPOINT_LENGTH", "2048"))
+MAX_RESPONSE_TIME_MS = float(os.environ.get("MAX_RESPONSE_TIME_MS", "600000"))
+LIST_DEFAULT_LIMIT = int(os.environ.get("LIST_DEFAULT_LIMIT", "100"))
+LIST_MAX_LIMIT = int(os.environ.get("LIST_MAX_LIMIT", "1000"))
 
 # In-memory store for health check results
 health_records: list[dict] = []
@@ -31,7 +36,7 @@ def health():
 
 @app.route("/api/v1/records", methods=["POST"])
 def add_record():
-    data = request.get_json()
+    data = request.get_json(silent=True)
     if not data:
         logger.warning("Received empty payload for record creation")
         return jsonify({"error": "Request body is required"}), 400
@@ -47,24 +52,61 @@ def add_record():
     if response_time_ms is None:
         return jsonify({"error": "Field 'response_time_ms' is required"}), 400
 
+    if not isinstance(endpoint, str):
+        return jsonify({"error": "Field 'endpoint' must be a string"}), 400
+    endpoint = endpoint.strip()
+    if not endpoint:
+        return jsonify({"error": "Field 'endpoint' must not be blank"}), 400
+    if len(endpoint) > MAX_ENDPOINT_LENGTH:
+        return jsonify({
+            "error": f"Field 'endpoint' must be at most {MAX_ENDPOINT_LENGTH} characters"
+        }), 400
+    if not (endpoint.startswith("http://") or endpoint.startswith("https://")):
+        return jsonify({
+            "error": "Field 'endpoint' must start with http:// or https://"
+        }), 400
+
+    if isinstance(status_code, bool):
+        return jsonify({"error": "Field 'status_code' must be an integer"}), 400
     try:
         status_code = int(status_code)
     except (ValueError, TypeError):
         return jsonify({"error": "Field 'status_code' must be an integer"}), 400
+    if not (100 <= status_code <= 599):
+        return jsonify({
+            "error": "Field 'status_code' must be between 100 and 599"
+        }), 400
 
     try:
         response_time_ms = float(response_time_ms)
     except (ValueError, TypeError):
         return jsonify({"error": "Field 'response_time_ms' must be a number"}), 400
-
+    if not math.isfinite(response_time_ms):
+        return jsonify({"error": "Field 'response_time_ms' must be a finite number"}), 400
     if response_time_ms < 0:
         return jsonify({"error": "Field 'response_time_ms' must be non-negative"}), 400
+    if response_time_ms > MAX_RESPONSE_TIME_MS:
+        return jsonify({
+            "error": f"Field 'response_time_ms' must be at most {MAX_RESPONSE_TIME_MS}"
+        }), 400
+
+    checked_at_input = data.get("checked_at")
+    if checked_at_input is not None:
+        if not isinstance(checked_at_input, str):
+            return jsonify({"error": "Field 'checked_at' must be an ISO 8601 string"}), 400
+        try:
+            datetime.fromisoformat(checked_at_input.replace("Z", "+00:00"))
+        except ValueError:
+            return jsonify({"error": "Field 'checked_at' must be ISO 8601"}), 400
+        checked_at_value = checked_at_input
+    else:
+        checked_at_value = datetime.now(timezone.utc).isoformat()
 
     record = {
         "endpoint": endpoint,
         "status_code": status_code,
         "response_time_ms": response_time_ms,
-        "checked_at": data.get("checked_at", datetime.now(timezone.utc).isoformat()),
+        "checked_at": checked_at_value,
         "healthy": 200 <= status_code < 400,
     }
     health_records.append(record)
@@ -84,7 +126,18 @@ def add_record():
 @app.route("/api/v1/records", methods=["GET"])
 def list_records():
     endpoint = request.args.get("endpoint")
-    limit = request.args.get("limit", 100, type=int)
+    limit_raw = request.args.get("limit")
+    if limit_raw is None:
+        limit = LIST_DEFAULT_LIMIT
+    else:
+        try:
+            limit = int(limit_raw)
+        except ValueError:
+            return jsonify({"error": "Query parameter 'limit' must be an integer"}), 400
+        if limit < 1 or limit > LIST_MAX_LIMIT:
+            return jsonify({
+                "error": f"Query parameter 'limit' must be between 1 and {LIST_MAX_LIMIT}"
+            }), 400
 
     filtered = health_records
     if endpoint:
@@ -92,7 +145,7 @@ def list_records():
 
     result = filtered[-limit:]
     logger.info("Listed %d records (filter=%s, limit=%d)", len(result), endpoint, limit)
-    return jsonify({"records": result, "total": len(filtered)})
+    return jsonify({"records": result, "total": len(filtered), "limit": limit})
 
 
 @app.route("/api/v1/records", methods=["DELETE"])
