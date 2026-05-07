@@ -117,7 +117,9 @@ All endpoints are accessible through the Gateway at `http://localhost:3000`.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/v1/records` | List health check records |
-| `GET` | `/api/v1/records?endpoint=URL&limit=N` | Filter records by endpoint |
+| `GET` | `/api/v1/records?endpoint=URL&limit=N` | Filter records by endpoint（`limit` は 1〜`LIST_MAX_LIMIT`） |
+| `POST` | `/api/v1/records` | Add a record（`endpoint` は `http(s)://` 必須・最大 `MAX_ENDPOINT_LENGTH`、`status_code` は 100〜599、`response_time_ms` は 0〜`MAX_RESPONSE_TIME_MS` の有限数、`checked_at` は ISO 8601） |
+| `DELETE` | `/api/v1/records?endpoint=URL` | 指定エンドポイントのレコードを削除 |
 | `GET` | `/api/v1/report` | Get uptime and performance report |
 
 ### Usage Examples
@@ -148,6 +150,11 @@ curl http://localhost:3000/api/v1/status
 | `CHECKER_URL` | `http://localhost:8080` | Checker service URL |
 | `ANALYTICS_URL` | `http://localhost:5000` | Analytics service URL |
 | `LOG_LEVEL` | `INFO` | Log level (DEBUG, INFO, WARNING, ERROR) |
+| `MAX_RECORDS` | `10000` | Analytics: 保存レコード上限 |
+| `MAX_ENDPOINT_LENGTH` | `2048` | Analytics: `endpoint` 最大長 |
+| `MAX_RESPONSE_TIME_MS` | `600000` | Analytics: `response_time_ms` の上限 |
+| `LIST_DEFAULT_LIMIT` | `100` | Analytics: `GET /api/v1/records` のデフォルト件数 |
+| `LIST_MAX_LIMIT` | `1000` | Analytics: `GET /api/v1/records?limit=` の上限 |
 
 ## Makefile Commands
 
