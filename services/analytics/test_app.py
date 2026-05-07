@@ -123,6 +123,120 @@ def test_list_records_with_limit(client):
     resp = client.get("/api/v1/records?limit=2")
     data = resp.get_json()
     assert len(data["records"]) == 2
+    assert data["limit"] == 2
+
+
+def test_list_records_rejects_zero_limit(client):
+    resp = client.get("/api/v1/records?limit=0")
+    assert resp.status_code == 400
+
+
+def test_list_records_rejects_negative_limit(client):
+    resp = client.get("/api/v1/records?limit=-5")
+    assert resp.status_code == 400
+
+
+def test_list_records_rejects_limit_above_max(client):
+    resp = client.get("/api/v1/records?limit=99999")
+    assert resp.status_code == 400
+
+
+def test_list_records_rejects_non_numeric_limit(client):
+    resp = client.get("/api/v1/records?limit=abc")
+    assert resp.status_code == 400
+
+
+def test_add_record_rejects_endpoint_without_scheme(client):
+    payload = {"endpoint": "example.com/path", "status_code": 200, "response_time_ms": 10}
+    resp = client.post("/api/v1/records", json=payload)
+    assert resp.status_code == 400
+    assert "http://" in resp.get_json()["error"]
+
+
+def test_add_record_rejects_blank_endpoint(client):
+    payload = {"endpoint": "   ", "status_code": 200, "response_time_ms": 10}
+    resp = client.post("/api/v1/records", json=payload)
+    assert resp.status_code == 400
+
+
+def test_add_record_rejects_overlong_endpoint(client):
+    payload = {
+        "endpoint": "https://" + "a" * 3000,
+        "status_code": 200,
+        "response_time_ms": 10,
+    }
+    resp = client.post("/api/v1/records", json=payload)
+    assert resp.status_code == 400
+    assert "at most" in resp.get_json()["error"]
+
+
+def test_add_record_rejects_status_code_out_of_range_low(client):
+    payload = {"endpoint": "https://e.com", "status_code": 99, "response_time_ms": 10}
+    resp = client.post("/api/v1/records", json=payload)
+    assert resp.status_code == 400
+
+
+def test_add_record_rejects_status_code_out_of_range_high(client):
+    payload = {"endpoint": "https://e.com", "status_code": 600, "response_time_ms": 10}
+    resp = client.post("/api/v1/records", json=payload)
+    assert resp.status_code == 400
+
+
+def test_add_record_accepts_status_code_at_boundary(client):
+    for code in (100, 599):
+        payload = {"endpoint": "https://e.com", "status_code": code, "response_time_ms": 1}
+        resp = client.post("/api/v1/records", json=payload)
+        assert resp.status_code == 201, f"failed for {code}"
+
+
+def test_add_record_rejects_response_time_above_max(client):
+    payload = {
+        "endpoint": "https://e.com",
+        "status_code": 200,
+        "response_time_ms": 600001,
+    }
+    resp = client.post("/api/v1/records", json=payload)
+    assert resp.status_code == 400
+
+
+def test_add_record_rejects_invalid_checked_at(client):
+    payload = {
+        "endpoint": "https://e.com",
+        "status_code": 200,
+        "response_time_ms": 10,
+        "checked_at": "banana",
+    }
+    resp = client.post("/api/v1/records", json=payload)
+    assert resp.status_code == 400
+
+
+def test_add_record_accepts_iso8601_checked_at(client):
+    payload = {
+        "endpoint": "https://e.com",
+        "status_code": 200,
+        "response_time_ms": 10,
+        "checked_at": "2026-05-07T12:34:56+00:00",
+    }
+    resp = client.post("/api/v1/records", json=payload)
+    assert resp.status_code == 201
+    assert resp.get_json()["checked_at"] == "2026-05-07T12:34:56+00:00"
+
+
+def test_add_record_strips_endpoint(client):
+    payload = {
+        "endpoint": "  https://e.com/path  ",
+        "status_code": 200,
+        "response_time_ms": 10,
+    }
+    resp = client.post("/api/v1/records", json=payload)
+    assert resp.status_code == 201
+    assert resp.get_json()["endpoint"] == "https://e.com/path"
+
+
+def test_add_record_rejects_status_code_boolean(client):
+    payload = {"endpoint": "https://e.com", "status_code": True, "response_time_ms": 10}
+    resp = client.post("/api/v1/records", json=payload)
+    assert resp.status_code == 400
 
 
 def test_delete_records_success(client):
