@@ -146,6 +146,114 @@ def test_list_records_rejects_non_numeric_limit(client):
     assert resp.status_code == 400
 
 
+def test_list_records_with_offset(client):
+    for i in range(5):
+        client.post("/api/v1/records", json={"endpoint": "https://x.com", "status_code": 200, "response_time_ms": i})
+    resp = client.get("/api/v1/records?limit=2&offset=2")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert len(data["records"]) == 2
+    assert data["offset"] == 2
+    assert data["total"] == 5
+    # offset starts from index 2 → response_time_ms 2 and 3
+    times = [r["response_time_ms"] for r in data["records"]]
+    assert times == [2.0, 3.0]
+
+
+def test_list_records_offset_beyond_total(client):
+    for i in range(3):
+        client.post("/api/v1/records", json={"endpoint": "https://x.com", "status_code": 200, "response_time_ms": i})
+    resp = client.get("/api/v1/records?offset=10")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert len(data["records"]) == 0
+    assert data["total"] == 3
+
+
+def test_list_records_rejects_negative_offset(client):
+    resp = client.get("/api/v1/records?offset=-1")
+    assert resp.status_code == 400
+
+
+def test_list_records_rejects_non_numeric_offset(client):
+    resp = client.get("/api/v1/records?offset=abc")
+    assert resp.status_code == 400
+
+
+def test_list_records_filter_since(client):
+    client.post("/api/v1/records", json={
+        "endpoint": "https://x.com", "status_code": 200, "response_time_ms": 1,
+        "checked_at": "2024-01-01T00:00:00+00:00",
+    })
+    client.post("/api/v1/records", json={
+        "endpoint": "https://x.com", "status_code": 200, "response_time_ms": 2,
+        "checked_at": "2025-06-01T00:00:00+00:00",
+    })
+    resp = client.get("/api/v1/records?since=2025-01-01T00:00:00%2B00:00")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["total"] == 1
+    assert data["records"][0]["response_time_ms"] == 2.0
+
+
+def test_list_records_filter_until(client):
+    client.post("/api/v1/records", json={
+        "endpoint": "https://x.com", "status_code": 200, "response_time_ms": 1,
+        "checked_at": "2024-01-01T00:00:00+00:00",
+    })
+    client.post("/api/v1/records", json={
+        "endpoint": "https://x.com", "status_code": 200, "response_time_ms": 2,
+        "checked_at": "2025-06-01T00:00:00+00:00",
+    })
+    resp = client.get("/api/v1/records?until=2024-12-31T23:59:59%2B00:00")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["total"] == 1
+    assert data["records"][0]["response_time_ms"] == 1.0
+
+
+def test_list_records_filter_since_and_until(client):
+    client.post("/api/v1/records", json={
+        "endpoint": "https://x.com", "status_code": 200, "response_time_ms": 1,
+        "checked_at": "2024-01-01T00:00:00+00:00",
+    })
+    client.post("/api/v1/records", json={
+        "endpoint": "https://x.com", "status_code": 200, "response_time_ms": 2,
+        "checked_at": "2024-06-01T00:00:00+00:00",
+    })
+    client.post("/api/v1/records", json={
+        "endpoint": "https://x.com", "status_code": 200, "response_time_ms": 3,
+        "checked_at": "2025-06-01T00:00:00+00:00",
+    })
+    resp = client.get(
+        "/api/v1/records?since=2024-03-01T00:00:00%2B00:00&until=2024-12-31T23:59:59%2B00:00"
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["total"] == 1
+    assert data["records"][0]["response_time_ms"] == 2.0
+
+
+def test_list_records_rejects_invalid_since(client):
+    resp = client.get("/api/v1/records?since=not-a-date")
+    assert resp.status_code == 400
+    assert "since" in resp.get_json()["error"]
+
+
+def test_list_records_rejects_invalid_until(client):
+    resp = client.get("/api/v1/records?until=2024-13-99T00:00:00")
+    assert resp.status_code == 400
+    assert "until" in resp.get_json()["error"]
+
+
+def test_list_records_rejects_until_before_since(client):
+    resp = client.get(
+        "/api/v1/records?since=2025-01-01T00:00:00%2B00:00&until=2024-01-01T00:00:00%2B00:00"
+    )
+    assert resp.status_code == 400
+    assert "until" in resp.get_json()["error"].lower()
+
+
 def test_add_record_rejects_endpoint_without_scheme(client):
     payload = {"endpoint": "example.com/path", "status_code": 200, "response_time_ms": 10}
     resp = client.post("/api/v1/records", json=payload)
