@@ -117,7 +117,7 @@ All endpoints are accessible through the Gateway at `http://localhost:3000`.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/v1/records` | List health check records |
-| `GET` | `/api/v1/records?endpoint=URL&limit=N` | Filter records by endpoint（`limit` は 1〜`LIST_MAX_LIMIT`） |
+| `GET` | `/api/v1/records?endpoint=URL&limit=N&offset=N&since=ISO&until=ISO` | Filter records by endpoint and time range（`limit` は 1〜`LIST_MAX_LIMIT`、`offset` は 0 以上、`since`/`until` は ISO 8601） |
 | `POST` | `/api/v1/records` | Add a record（`endpoint` は `http(s)://` 必須・最大 `MAX_ENDPOINT_LENGTH`、`status_code` は 100〜599、`response_time_ms` は 0〜`MAX_RESPONSE_TIME_MS` の有限数、`checked_at` は ISO 8601） |
 | `DELETE` | `/api/v1/records?endpoint=URL` | 指定エンドポイントのレコードを削除 |
 | `GET` | `/api/v1/report` | Get uptime and performance report |
