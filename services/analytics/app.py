@@ -123,10 +123,31 @@ def add_record():
     return jsonify(record), 201
 
 
+def _parse_iso8601_arg(value: str, name: str) -> datetime:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"Query parameter '{name}' must be ISO 8601") from e
+
+
+def _record_checked_at(record: dict) -> datetime | None:
+    raw = record.get("checked_at")
+    if not isinstance(raw, str):
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
 @app.route("/api/v1/records", methods=["GET"])
 def list_records():
     endpoint = request.args.get("endpoint")
     limit_raw = request.args.get("limit")
+    offset_raw = request.args.get("offset")
+    since_raw = request.args.get("since")
+    until_raw = request.args.get("until")
+
     if limit_raw is None:
         limit = LIST_DEFAULT_LIMIT
     else:
@@ -139,13 +160,56 @@ def list_records():
                 "error": f"Query parameter 'limit' must be between 1 and {LIST_MAX_LIMIT}"
             }), 400
 
+    if offset_raw is None:
+        offset = 0
+    else:
+        try:
+            offset = int(offset_raw)
+        except ValueError:
+            return jsonify({"error": "Query parameter 'offset' must be an integer"}), 400
+        if offset < 0:
+            return jsonify({"error": "Query parameter 'offset' must be non-negative"}), 400
+
+    since = until = None
+    try:
+        if since_raw is not None:
+            since = _parse_iso8601_arg(since_raw, "since")
+        if until_raw is not None:
+            until = _parse_iso8601_arg(until_raw, "until")
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    if since is not None and until is not None and until < since:
+        return jsonify({"error": "Query parameter 'until' must be greater than or equal to 'since'"}), 400
+
     filtered = health_records
     if endpoint:
         filtered = [r for r in filtered if r["endpoint"] == endpoint]
+    if since is not None or until is not None:
+        narrowed = []
+        for r in filtered:
+            checked_at = _record_checked_at(r)
+            if checked_at is None:
+                continue
+            if since is not None and checked_at < since:
+                continue
+            if until is not None and checked_at > until:
+                continue
+            narrowed.append(r)
+        filtered = narrowed
 
-    result = filtered[-limit:]
-    logger.info("Listed %d records (filter=%s, limit=%d)", len(result), endpoint, limit)
-    return jsonify({"records": result, "total": len(filtered), "limit": limit})
+    total = len(filtered)
+    result = filtered[offset:offset + limit]
+    logger.info(
+        "Listed %d records (filter=%s, limit=%d, offset=%d, total=%d)",
+        len(result), endpoint, limit, offset, total,
+    )
+    return jsonify({
+        "records": result,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    })
 
 
 @app.route("/api/v1/records", methods=["DELETE"])
