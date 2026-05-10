@@ -174,9 +174,11 @@ describe("Gateway Service", () => {
                 res.end(JSON.stringify({ message: "deleted", deleted: 0 }));
               }
             });
-          } else if (req.method === "GET" && req.url === "/api/v1/report") {
+          } else if (req.method === "GET" && req.url?.startsWith("/api/v1/report")) {
             res.writeHead(200);
-            res.end(JSON.stringify({ endpoints: {} }));
+            res.end(
+              JSON.stringify({ endpoints: {}, forwarded_query: req.url.split("?")[1] || "" })
+            );
           } else if (req.url === "/health") {
             res.writeHead(200);
             res.end(JSON.stringify({ status: "ok", service: "analytics" }));
@@ -231,6 +233,16 @@ describe("Gateway Service", () => {
       const res = await request(app).get("/api/v1/report");
       expect(res.status).toBe(200);
       expect(res.body.endpoints).toEqual({});
+      expect(res.body.forwarded_query).toBe("");
+    });
+
+    it("should proxy GET /api/v1/report with query params", async () => {
+      const res = await request(app).get(
+        "/api/v1/report?endpoint=https%3A%2F%2Fa.example.com%2Fh&since=2026-01-01T00%3A00%3A00Z"
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.forwarded_query).toContain("endpoint=https%3A%2F%2Fa.example.com%2Fh");
+      expect(res.body.forwarded_query).toContain("since=2026-01-01T00%3A00%3A00Z");
     });
   });
 
