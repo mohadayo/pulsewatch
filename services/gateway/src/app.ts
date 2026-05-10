@@ -170,9 +170,11 @@ app.delete("/api/v1/records", async (req: Request, res: Response, next: NextFunc
   }
 });
 
-app.get("/api/v1/report", async (_req: Request, res: Response, next: NextFunction) => {
+app.get("/api/v1/report", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const result = await proxyRequest(analyticsUrl(), "/api/v1/report", "GET");
+    const query = req.url.split("?")[1] || "";
+    const path = query ? `/api/v1/report?${query}` : "/api/v1/report";
+    const result = await proxyRequest(analyticsUrl(), path, "GET");
     res.status(result.status).json(result.data);
   } catch (err) {
     next(err);

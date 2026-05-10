@@ -233,11 +233,43 @@ def delete_records():
 
 @app.route("/api/v1/report", methods=["GET"])
 def report():
-    if not health_records:
+    endpoint_filter = request.args.get("endpoint")
+    since_raw = request.args.get("since")
+    until_raw = request.args.get("until")
+
+    since = until = None
+    try:
+        if since_raw is not None:
+            since = _parse_iso8601_arg(since_raw, "since")
+        if until_raw is not None:
+            until = _parse_iso8601_arg(until_raw, "until")
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    if since is not None and until is not None and until < since:
+        return jsonify({"error": "Query parameter 'until' must be greater than or equal to 'since'"}), 400
+
+    filtered = health_records
+    if endpoint_filter:
+        filtered = [r for r in filtered if r["endpoint"] == endpoint_filter]
+    if since is not None or until is not None:
+        narrowed = []
+        for r in filtered:
+            checked_at = _record_checked_at(r)
+            if checked_at is None:
+                continue
+            if since is not None and checked_at < since:
+                continue
+            if until is not None and checked_at > until:
+                continue
+            narrowed.append(r)
+        filtered = narrowed
+
+    if not filtered:
         return jsonify({"message": "No records available", "endpoints": {}})
 
     endpoints: dict[str, dict] = {}
-    for r in health_records:
+    for r in filtered:
         ep = r["endpoint"]
         if ep not in endpoints:
             endpoints[ep] = {

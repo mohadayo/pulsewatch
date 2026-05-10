@@ -470,3 +470,96 @@ def test_records_store_eviction_preserves_order(client, monkeypatch):
     assert data["total"] == 2
     assert data["records"][0]["endpoint"] == "https://ep-2.com"
     assert data["records"][1]["endpoint"] == "https://ep-3.com"
+
+
+def test_report_filters_by_endpoint(client):
+    health_records.append({
+        "endpoint": "https://a.example.com/h",
+        "status_code": 200,
+        "response_time_ms": 10.0,
+        "checked_at": "2026-01-01T00:00:00+00:00",
+        "healthy": True,
+    })
+    health_records.append({
+        "endpoint": "https://b.example.com/h",
+        "status_code": 500,
+        "response_time_ms": 100.0,
+        "checked_at": "2026-01-01T00:00:00+00:00",
+        "healthy": False,
+    })
+    resp = client.get("/api/v1/report?endpoint=https://a.example.com/h")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert "https://a.example.com/h" in data["endpoints"]
+    assert "https://b.example.com/h" not in data["endpoints"]
+
+
+def test_report_filters_by_since(client):
+    health_records.append({
+        "endpoint": "https://x.example.com/h",
+        "status_code": 200,
+        "response_time_ms": 10.0,
+        "checked_at": "2024-01-01T00:00:00+00:00",
+        "healthy": True,
+    })
+    health_records.append({
+        "endpoint": "https://x.example.com/h",
+        "status_code": 200,
+        "response_time_ms": 20.0,
+        "checked_at": "2026-06-01T00:00:00+00:00",
+        "healthy": True,
+    })
+    resp = client.get("/api/v1/report?since=2026-01-01T00:00:00Z")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    stats = data["endpoints"]["https://x.example.com/h"]
+    assert stats["total_checks"] == 1
+    assert stats["avg_response_time_ms"] == 20.0
+
+
+def test_report_filters_by_until(client):
+    health_records.append({
+        "endpoint": "https://x.example.com/h",
+        "status_code": 200,
+        "response_time_ms": 10.0,
+        "checked_at": "2024-01-01T00:00:00+00:00",
+        "healthy": True,
+    })
+    health_records.append({
+        "endpoint": "https://x.example.com/h",
+        "status_code": 200,
+        "response_time_ms": 20.0,
+        "checked_at": "2026-06-01T00:00:00+00:00",
+        "healthy": True,
+    })
+    resp = client.get("/api/v1/report?until=2025-01-01T00:00:00Z")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    stats = data["endpoints"]["https://x.example.com/h"]
+    assert stats["total_checks"] == 1
+    assert stats["avg_response_time_ms"] == 10.0
+
+
+def test_report_rejects_invalid_since(client):
+    resp = client.get("/api/v1/report?since=garbage")
+    assert resp.status_code == 400
+    assert "since" in resp.get_json()["error"]
+
+
+def test_report_rejects_until_before_since(client):
+    resp = client.get("/api/v1/report?since=2026-06-01T00:00:00Z&until=2024-01-01T00:00:00Z")
+    assert resp.status_code == 400
+
+
+def test_report_returns_no_records_when_filter_excludes_all(client):
+    health_records.append({
+        "endpoint": "https://x.example.com/h",
+        "status_code": 200,
+        "response_time_ms": 10.0,
+        "checked_at": "2024-01-01T00:00:00+00:00",
+        "healthy": True,
+    })
+    resp = client.get("/api/v1/report?endpoint=https://does-not-exist.example/h")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["endpoints"] == {}
