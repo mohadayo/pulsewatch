@@ -563,3 +563,61 @@ def test_report_returns_no_records_when_filter_excludes_all(client):
     assert resp.status_code == 200
     data = resp.get_json()
     assert data["endpoints"] == {}
+
+
+def test_list_records_filter_healthy_true(client):
+    client.post("/api/v1/records", json={"endpoint": "https://a.com", "status_code": 200, "response_time_ms": 10})
+    client.post("/api/v1/records", json={"endpoint": "https://a.com", "status_code": 500, "response_time_ms": 20})
+    resp = client.get("/api/v1/records?healthy=true")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["total"] == 1
+    assert data["records"][0]["status_code"] == 200
+
+
+def test_list_records_filter_healthy_false(client):
+    client.post("/api/v1/records", json={"endpoint": "https://a.com", "status_code": 200, "response_time_ms": 10})
+    client.post("/api/v1/records", json={"endpoint": "https://a.com", "status_code": 503, "response_time_ms": 20})
+    client.post("/api/v1/records", json={"endpoint": "https://a.com", "status_code": 502, "response_time_ms": 30})
+    resp = client.get("/api/v1/records?healthy=false")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["total"] == 2
+    assert all(r["healthy"] is False for r in data["records"])
+
+
+def test_list_records_healthy_accepts_aliases(client):
+    client.post("/api/v1/records", json={"endpoint": "https://a.com", "status_code": 200, "response_time_ms": 10})
+    client.post("/api/v1/records", json={"endpoint": "https://a.com", "status_code": 500, "response_time_ms": 20})
+    for alias in ("1", "yes", "TRUE"):
+        resp = client.get(f"/api/v1/records?healthy={alias}")
+        assert resp.status_code == 200
+        assert resp.get_json()["total"] == 1
+    for alias in ("0", "no", "FALSE"):
+        resp = client.get(f"/api/v1/records?healthy={alias}")
+        assert resp.status_code == 200
+        assert resp.get_json()["total"] == 1
+
+
+def test_list_records_healthy_rejects_invalid(client):
+    resp = client.get("/api/v1/records?healthy=maybe")
+    assert resp.status_code == 400
+    assert "healthy" in resp.get_json()["error"]
+
+
+def test_report_filter_healthy_only_unhealthy(client):
+    client.post("/api/v1/records", json={"endpoint": "https://a.com", "status_code": 200, "response_time_ms": 10})
+    client.post("/api/v1/records", json={"endpoint": "https://a.com", "status_code": 500, "response_time_ms": 50})
+    client.post("/api/v1/records", json={"endpoint": "https://a.com", "status_code": 502, "response_time_ms": 100})
+    resp = client.get("/api/v1/report?healthy=false")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    stats = data["endpoints"]["https://a.com"]
+    assert stats["total_checks"] == 2
+    assert stats["healthy_checks"] == 0
+    assert stats["uptime_percent"] == 0
+
+
+def test_report_healthy_rejects_invalid(client):
+    resp = client.get("/api/v1/report?healthy=meh")
+    assert resp.status_code == 400
