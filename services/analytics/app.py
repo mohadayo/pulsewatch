@@ -140,6 +140,48 @@ def _record_checked_at(record: dict) -> datetime | None:
         return None
 
 
+_HEALTHY_TRUE = {"true", "1", "yes"}
+_HEALTHY_FALSE = {"false", "0", "no"}
+
+
+def _parse_bool_arg(value: str, name: str) -> bool:
+    lowered = value.strip().lower()
+    if lowered in _HEALTHY_TRUE:
+        return True
+    if lowered in _HEALTHY_FALSE:
+        return False
+    raise ValueError(
+        f"Query parameter '{name}' must be one of: true, false, 1, 0, yes, no"
+    )
+
+
+def _filter_records(
+    records: list[dict],
+    endpoint: str | None,
+    since: datetime | None,
+    until: datetime | None,
+    healthy: bool | None,
+) -> list[dict]:
+    filtered = records
+    if endpoint:
+        filtered = [r for r in filtered if r["endpoint"] == endpoint]
+    if healthy is not None:
+        filtered = [r for r in filtered if bool(r.get("healthy")) == healthy]
+    if since is not None or until is not None:
+        narrowed = []
+        for r in filtered:
+            checked_at = _record_checked_at(r)
+            if checked_at is None:
+                continue
+            if since is not None and checked_at < since:
+                continue
+            if until is not None and checked_at > until:
+                continue
+            narrowed.append(r)
+        filtered = narrowed
+    return filtered
+
+
 @app.route("/api/v1/records", methods=["GET"])
 def list_records():
     endpoint = request.args.get("endpoint")
@@ -147,6 +189,7 @@ def list_records():
     offset_raw = request.args.get("offset")
     since_raw = request.args.get("since")
     until_raw = request.args.get("until")
+    healthy_raw = request.args.get("healthy")
 
     if limit_raw is None:
         limit = LIST_DEFAULT_LIMIT
@@ -182,27 +225,20 @@ def list_records():
     if since is not None and until is not None and until < since:
         return jsonify({"error": "Query parameter 'until' must be greater than or equal to 'since'"}), 400
 
-    filtered = health_records
-    if endpoint:
-        filtered = [r for r in filtered if r["endpoint"] == endpoint]
-    if since is not None or until is not None:
-        narrowed = []
-        for r in filtered:
-            checked_at = _record_checked_at(r)
-            if checked_at is None:
-                continue
-            if since is not None and checked_at < since:
-                continue
-            if until is not None and checked_at > until:
-                continue
-            narrowed.append(r)
-        filtered = narrowed
+    healthy: bool | None = None
+    if healthy_raw is not None:
+        try:
+            healthy = _parse_bool_arg(healthy_raw, "healthy")
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+
+    filtered = _filter_records(health_records, endpoint, since, until, healthy)
 
     total = len(filtered)
     result = filtered[offset:offset + limit]
     logger.info(
-        "Listed %d records (filter=%s, limit=%d, offset=%d, total=%d)",
-        len(result), endpoint, limit, offset, total,
+        "Listed %d records (filter=%s, healthy=%s, limit=%d, offset=%d, total=%d)",
+        len(result), endpoint, healthy, limit, offset, total,
     )
     return jsonify({
         "records": result,
@@ -236,6 +272,7 @@ def report():
     endpoint_filter = request.args.get("endpoint")
     since_raw = request.args.get("since")
     until_raw = request.args.get("until")
+    healthy_raw = request.args.get("healthy")
 
     since = until = None
     try:
@@ -249,21 +286,14 @@ def report():
     if since is not None and until is not None and until < since:
         return jsonify({"error": "Query parameter 'until' must be greater than or equal to 'since'"}), 400
 
-    filtered = health_records
-    if endpoint_filter:
-        filtered = [r for r in filtered if r["endpoint"] == endpoint_filter]
-    if since is not None or until is not None:
-        narrowed = []
-        for r in filtered:
-            checked_at = _record_checked_at(r)
-            if checked_at is None:
-                continue
-            if since is not None and checked_at < since:
-                continue
-            if until is not None and checked_at > until:
-                continue
-            narrowed.append(r)
-        filtered = narrowed
+    healthy: bool | None = None
+    if healthy_raw is not None:
+        try:
+            healthy = _parse_bool_arg(healthy_raw, "healthy")
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+
+    filtered = _filter_records(health_records, endpoint_filter, since, until, healthy)
 
     if not filtered:
         return jsonify({"message": "No records available", "endpoints": {}})
