@@ -155,18 +155,35 @@ def _parse_bool_arg(value: str, name: str) -> bool:
     )
 
 
+def _parse_status_code_arg(value: str, name: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as e:
+        raise ValueError(
+            f"Query parameter '{name}' must be an integer"
+        ) from e
+    if not (100 <= parsed <= 599):
+        raise ValueError(
+            f"Query parameter '{name}' must be between 100 and 599"
+        )
+    return parsed
+
+
 def _filter_records(
     records: list[dict],
     endpoint: str | None,
     since: datetime | None,
     until: datetime | None,
     healthy: bool | None,
+    status_code: int | None = None,
 ) -> list[dict]:
     filtered = records
     if endpoint:
         filtered = [r for r in filtered if r["endpoint"] == endpoint]
     if healthy is not None:
         filtered = [r for r in filtered if bool(r.get("healthy")) == healthy]
+    if status_code is not None:
+        filtered = [r for r in filtered if r.get("status_code") == status_code]
     if since is not None or until is not None:
         narrowed = []
         for r in filtered:
@@ -190,6 +207,7 @@ def list_records():
     since_raw = request.args.get("since")
     until_raw = request.args.get("until")
     healthy_raw = request.args.get("healthy")
+    status_code_raw = request.args.get("status_code")
 
     if limit_raw is None:
         limit = LIST_DEFAULT_LIMIT
@@ -232,13 +250,22 @@ def list_records():
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
 
-    filtered = _filter_records(health_records, endpoint, since, until, healthy)
+    status_code: int | None = None
+    if status_code_raw is not None:
+        try:
+            status_code = _parse_status_code_arg(status_code_raw, "status_code")
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+
+    filtered = _filter_records(
+        health_records, endpoint, since, until, healthy, status_code,
+    )
 
     total = len(filtered)
     result = filtered[offset:offset + limit]
     logger.info(
-        "Listed %d records (filter=%s, healthy=%s, limit=%d, offset=%d, total=%d)",
-        len(result), endpoint, healthy, limit, offset, total,
+        "Listed %d records (filter=%s, healthy=%s, status_code=%s, limit=%d, offset=%d, total=%d)",
+        len(result), endpoint, healthy, status_code, limit, offset, total,
     )
     return jsonify({
         "records": result,
@@ -273,6 +300,7 @@ def report():
     since_raw = request.args.get("since")
     until_raw = request.args.get("until")
     healthy_raw = request.args.get("healthy")
+    status_code_raw = request.args.get("status_code")
 
     since = until = None
     try:
@@ -293,7 +321,16 @@ def report():
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
 
-    filtered = _filter_records(health_records, endpoint_filter, since, until, healthy)
+    status_code: int | None = None
+    if status_code_raw is not None:
+        try:
+            status_code = _parse_status_code_arg(status_code_raw, "status_code")
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+
+    filtered = _filter_records(
+        health_records, endpoint_filter, since, until, healthy, status_code,
+    )
 
     if not filtered:
         return jsonify({"message": "No records available", "endpoints": {}})
