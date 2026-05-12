@@ -621,3 +621,60 @@ def test_report_filter_healthy_only_unhealthy(client):
 def test_report_healthy_rejects_invalid(client):
     resp = client.get("/api/v1/report?healthy=meh")
     assert resp.status_code == 400
+
+
+def test_list_records_filter_status_code(client):
+    client.post("/api/v1/records", json={"endpoint": "https://a.com", "status_code": 200, "response_time_ms": 10})
+    client.post("/api/v1/records", json={"endpoint": "https://a.com", "status_code": 404, "response_time_ms": 20})
+    client.post("/api/v1/records", json={"endpoint": "https://a.com", "status_code": 500, "response_time_ms": 30})
+    client.post("/api/v1/records", json={"endpoint": "https://b.com", "status_code": 404, "response_time_ms": 40})
+    resp = client.get("/api/v1/records?status_code=404")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["total"] == 2
+    assert all(r["status_code"] == 404 for r in data["records"])
+
+
+def test_list_records_status_code_combined_with_endpoint(client):
+    client.post("/api/v1/records", json={"endpoint": "https://a.com", "status_code": 200, "response_time_ms": 10})
+    client.post("/api/v1/records", json={"endpoint": "https://a.com", "status_code": 500, "response_time_ms": 20})
+    client.post("/api/v1/records", json={"endpoint": "https://b.com", "status_code": 500, "response_time_ms": 30})
+    resp = client.get("/api/v1/records?endpoint=https://a.com&status_code=500")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["total"] == 1
+    assert data["records"][0]["endpoint"] == "https://a.com"
+    assert data["records"][0]["status_code"] == 500
+
+
+def test_list_records_status_code_rejects_non_integer(client):
+    resp = client.get("/api/v1/records?status_code=abc")
+    assert resp.status_code == 400
+    assert "status_code" in resp.get_json()["error"]
+
+
+def test_list_records_status_code_rejects_out_of_range(client):
+    resp = client.get("/api/v1/records?status_code=42")
+    assert resp.status_code == 400
+    assert "status_code" in resp.get_json()["error"]
+    resp = client.get("/api/v1/records?status_code=999")
+    assert resp.status_code == 400
+
+
+def test_report_filter_status_code(client):
+    client.post("/api/v1/records", json={"endpoint": "https://a.com", "status_code": 200, "response_time_ms": 10})
+    client.post("/api/v1/records", json={"endpoint": "https://a.com", "status_code": 500, "response_time_ms": 50})
+    client.post("/api/v1/records", json={"endpoint": "https://b.com", "status_code": 500, "response_time_ms": 70})
+    resp = client.get("/api/v1/report?status_code=500")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    eps = data["endpoints"]
+    assert set(eps.keys()) == {"https://a.com", "https://b.com"}
+    assert eps["https://a.com"]["total_checks"] == 1
+    assert eps["https://b.com"]["total_checks"] == 1
+
+
+def test_report_status_code_rejects_invalid(client):
+    resp = client.get("/api/v1/report?status_code=notanint")
+    assert resp.status_code == 400
+    assert "status_code" in resp.get_json()["error"]
