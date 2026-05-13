@@ -678,3 +678,122 @@ def test_report_status_code_rejects_invalid(client):
     resp = client.get("/api/v1/report?status_code=notanint")
     assert resp.status_code == 400
     assert "status_code" in resp.get_json()["error"]
+
+
+def test_report_includes_percentiles(client):
+    for i in range(1, 11):
+        client.post(
+            "/api/v1/records",
+            json={
+                "endpoint": "https://percentile.test",
+                "status_code": 200,
+                "response_time_ms": float(i * 10),
+            },
+        )
+    data = client.get("/api/v1/report").get_json()
+    stats = data["endpoints"]["https://percentile.test"]
+    assert stats["min_response_time_ms"] == 10.0
+    assert stats["max_response_time_ms"] == 100.0
+    assert stats["p50_response_time_ms"] == 55.0
+    assert stats["p95_response_time_ms"] >= 90.0
+    assert stats["p99_response_time_ms"] >= 95.0
+
+
+def test_report_percentile_single_sample(client):
+    client.post(
+        "/api/v1/records",
+        json={
+            "endpoint": "https://one.test",
+            "status_code": 200,
+            "response_time_ms": 42.0,
+        },
+    )
+    stats = client.get("/api/v1/report").get_json()["endpoints"]["https://one.test"]
+    assert stats["p50_response_time_ms"] == 42.0
+    assert stats["p95_response_time_ms"] == 42.0
+    assert stats["p99_response_time_ms"] == 42.0
+
+
+def test_list_records_sort_by_response_time_asc(client):
+    for v in [50.0, 10.0, 30.0]:
+        client.post(
+            "/api/v1/records",
+            json={
+                "endpoint": "https://sort.test",
+                "status_code": 200,
+                "response_time_ms": v,
+            },
+        )
+    resp = client.get("/api/v1/records?sort=response_time_ms&order=asc")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["sort"] == "response_time_ms"
+    assert data["order"] == "asc"
+    rts = [r["response_time_ms"] for r in data["records"]]
+    assert rts == [10.0, 30.0, 50.0]
+
+
+def test_list_records_sort_by_response_time_desc(client):
+    for v in [50.0, 10.0, 30.0]:
+        client.post(
+            "/api/v1/records",
+            json={
+                "endpoint": "https://sort.test",
+                "status_code": 200,
+                "response_time_ms": v,
+            },
+        )
+    rts = [r["response_time_ms"] for r in client.get(
+        "/api/v1/records?sort=response_time_ms&order=desc"
+    ).get_json()["records"]]
+    assert rts == [50.0, 30.0, 10.0]
+
+
+def test_list_records_sort_by_endpoint(client):
+    for ep in ["https://zebra.test", "https://apple.test", "https://mango.test"]:
+        client.post(
+            "/api/v1/records",
+            json={"endpoint": ep, "status_code": 200, "response_time_ms": 1.0},
+        )
+    eps = [r["endpoint"] for r in client.get(
+        "/api/v1/records?sort=endpoint"
+    ).get_json()["records"]]
+    assert eps == ["https://apple.test", "https://mango.test", "https://zebra.test"]
+
+
+def test_list_records_rejects_invalid_sort_field(client):
+    resp = client.get("/api/v1/records?sort=bogus")
+    assert resp.status_code == 400
+    assert "sort" in resp.get_json()["error"]
+
+
+def test_list_records_rejects_invalid_sort_order(client):
+    resp = client.get("/api/v1/records?order=sideways")
+    assert resp.status_code == 400
+    assert "order" in resp.get_json()["error"]
+
+
+def test_records_lock_concurrent_writes():
+    from app import health_records, records_lock
+    import threading as _threading
+
+    health_records.clear()
+
+    def writer(tag):
+        for i in range(40):
+            with records_lock:
+                health_records.append({
+                    "endpoint": f"https://{tag}.test",
+                    "status_code": 200,
+                    "response_time_ms": float(i),
+                    "checked_at": "2024-01-01T00:00:00+00:00",
+                    "healthy": True,
+                })
+
+    threads = [_threading.Thread(target=writer, args=(f"t{i}",)) for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(health_records) == 4 * 40
