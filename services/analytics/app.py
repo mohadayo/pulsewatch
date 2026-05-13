@@ -3,6 +3,7 @@
 import logging
 import math
 import os
+import threading
 import time
 from datetime import datetime, timezone
 from flask import Flask, jsonify, request
@@ -25,7 +26,25 @@ LIST_MAX_LIMIT = int(os.environ.get("LIST_MAX_LIMIT", "1000"))
 
 # In-memory store for health check results
 health_records: list[dict] = []
+records_lock = threading.Lock()
 start_time = time.time()
+
+ALLOWED_SORT_FIELDS = {"checked_at", "endpoint", "response_time_ms", "status_code"}
+ALLOWED_SORT_ORDERS = {"asc", "desc"}
+
+
+def _percentile(sorted_values: list[float], pct: float) -> float:
+    if not sorted_values:
+        return 0.0
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+    rank = (pct / 100.0) * (len(sorted_values) - 1)
+    lower = int(math.floor(rank))
+    upper = int(math.ceil(rank))
+    if lower == upper:
+        return sorted_values[lower]
+    weight = rank - lower
+    return sorted_values[lower] * (1 - weight) + sorted_values[upper] * weight
 
 
 @app.route("/health")
@@ -109,12 +128,12 @@ def add_record():
         "checked_at": checked_at_value,
         "healthy": 200 <= status_code < 400,
     }
-    health_records.append(record)
-
-    if len(health_records) > MAX_RECORDS:
-        removed = len(health_records) - MAX_RECORDS
-        del health_records[:removed]
-        logger.info("Evicted %d old records (store capped at %d)", removed, MAX_RECORDS)
+    with records_lock:
+        health_records.append(record)
+        if len(health_records) > MAX_RECORDS:
+            removed = len(health_records) - MAX_RECORDS
+            del health_records[:removed]
+            logger.info("Evicted %d old records (store capped at %d)", removed, MAX_RECORDS)
 
     logger.info(
         "Recorded health check for %s: status=%d, time=%.1fms",
@@ -257,9 +276,23 @@ def list_records():
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
 
-    filtered = _filter_records(
-        health_records, endpoint, since, until, healthy, status_code,
-    )
+    sort_field = request.args.get("sort", "checked_at")
+    sort_order = request.args.get("order", "asc")
+    if sort_field not in ALLOWED_SORT_FIELDS:
+        return jsonify({
+            "error": "Query parameter 'sort' must be one of: " + ", ".join(sorted(ALLOWED_SORT_FIELDS)),
+        }), 400
+    if sort_order not in ALLOWED_SORT_ORDERS:
+        return jsonify({
+            "error": "Query parameter 'order' must be one of: " + ", ".join(sorted(ALLOWED_SORT_ORDERS)),
+        }), 400
+
+    with records_lock:
+        snapshot = list(health_records)
+    filtered = _filter_records(snapshot, endpoint, since, until, healthy, status_code)
+
+    reverse = sort_order == "desc"
+    filtered.sort(key=lambda r: r.get(sort_field, ""), reverse=reverse)
 
     total = len(filtered)
     result = filtered[offset:offset + limit]
@@ -272,6 +305,8 @@ def list_records():
         "total": total,
         "limit": limit,
         "offset": offset,
+        "sort": sort_field,
+        "order": sort_order,
     })
 
 
@@ -282,9 +317,10 @@ def delete_records():
         logger.warning("Delete request missing endpoint parameter")
         return jsonify({"error": "Query parameter 'endpoint' is required"}), 400
 
-    before_count = len(health_records)
-    health_records[:] = [r for r in health_records if r["endpoint"] != endpoint]
-    deleted_count = before_count - len(health_records)
+    with records_lock:
+        before_count = len(health_records)
+        health_records[:] = [r for r in health_records if r["endpoint"] != endpoint]
+        deleted_count = before_count - len(health_records)
 
     if deleted_count == 0:
         logger.info("No records found for deletion: %s", endpoint)
@@ -328,9 +364,9 @@ def report():
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
 
-    filtered = _filter_records(
-        health_records, endpoint_filter, since, until, healthy, status_code,
-    )
+    with records_lock:
+        snapshot = list(health_records)
+    filtered = _filter_records(snapshot, endpoint_filter, since, until, healthy, status_code)
 
     if not filtered:
         return jsonify({"message": "No records available", "endpoints": {}})
@@ -345,6 +381,7 @@ def report():
                 "total_response_time_ms": 0.0,
                 "min_response_time_ms": float("inf"),
                 "max_response_time_ms": 0.0,
+                "response_times": [],
             }
         stats = endpoints[ep]
         stats["total_checks"] += 1
@@ -353,10 +390,12 @@ def report():
         stats["total_response_time_ms"] += r["response_time_ms"]
         stats["min_response_time_ms"] = min(stats["min_response_time_ms"], r["response_time_ms"])
         stats["max_response_time_ms"] = max(stats["max_response_time_ms"], r["response_time_ms"])
+        stats["response_times"].append(r["response_time_ms"])
 
     report_data: dict[str, dict] = {}
     for ep, stats in endpoints.items():
         total = stats["total_checks"]
+        sorted_times = sorted(stats["response_times"])
         report_data[ep] = {
             "total_checks": total,
             "healthy_checks": stats["healthy_checks"],
@@ -364,6 +403,9 @@ def report():
             "avg_response_time_ms": round(stats["total_response_time_ms"] / total, 2) if total > 0 else 0,
             "min_response_time_ms": round(stats["min_response_time_ms"], 2),
             "max_response_time_ms": round(stats["max_response_time_ms"], 2),
+            "p50_response_time_ms": round(_percentile(sorted_times, 50), 2),
+            "p95_response_time_ms": round(_percentile(sorted_times, 95), 2),
+            "p99_response_time_ms": round(_percentile(sorted_times, 99), 2),
         }
 
     logger.info("Generated report for %d endpoints", len(report_data))
