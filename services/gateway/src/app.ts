@@ -156,14 +156,32 @@ app.get("/api/v1/records", async (req: Request, res: Response, next: NextFunctio
   }
 });
 
+const DELETE_FILTER_FIELDS = [
+  "endpoint",
+  "since",
+  "until",
+  "status_code",
+  "healthy",
+] as const;
+
 app.delete("/api/v1/records", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    if (!req.body.endpoint) {
-      res.status(400).json({ error: "Field 'endpoint' is required" });
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const hasAnyFilter = DELETE_FILTER_FIELDS.some(
+      (field) => body[field] !== undefined && body[field] !== null && body[field] !== "",
+    );
+    if (!hasAnyFilter) {
+      res.status(400).json({
+        error: `At least one of: ${DELETE_FILTER_FIELDS.join(", ")} is required`,
+      });
       return;
     }
-    const result = await proxyRequest(analyticsUrl(), "/api/v1/records", "DELETE", req.body);
-    logger.info(`Deleted records for endpoint: ${req.body.endpoint}`);
+    const result = await proxyRequest(analyticsUrl(), "/api/v1/records", "DELETE", body);
+    const summary = DELETE_FILTER_FIELDS
+      .filter((f) => body[f] !== undefined && body[f] !== null && body[f] !== "")
+      .map((f) => `${f}=${String(body[f])}`)
+      .join(", ");
+    logger.info(`Deleted records with filters: ${summary}`);
     res.status(result.status).json(result.data);
   } catch (err) {
     next(err);
