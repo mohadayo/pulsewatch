@@ -310,23 +310,79 @@ def list_records():
     })
 
 
+def _get_delete_param(name: str, body: dict | None) -> str | None:
+    """Read a DELETE filter from query string first, then JSON body."""
+    value = request.args.get(name)
+    if value is not None:
+        return value
+    if body is not None and name in body and body[name] is not None:
+        return str(body[name])
+    return None
+
+
 @app.route("/api/v1/records", methods=["DELETE"])
 def delete_records():
-    endpoint = request.args.get("endpoint")
-    if not endpoint:
-        logger.warning("Delete request missing endpoint parameter")
-        return jsonify({"error": "Query parameter 'endpoint' is required"}), 400
+    body = request.get_json(silent=True) if request.is_json else None
+    if body is not None and not isinstance(body, dict):
+        body = None
+
+    endpoint = _get_delete_param("endpoint", body)
+    since_raw = _get_delete_param("since", body)
+    until_raw = _get_delete_param("until", body)
+    status_code_raw = _get_delete_param("status_code", body)
+    healthy_raw = _get_delete_param("healthy", body)
+
+    if not any([endpoint, since_raw, until_raw, status_code_raw, healthy_raw]):
+        logger.warning("Delete request missing all filters")
+        return jsonify({
+            "error": "At least one of 'endpoint', 'since', 'until', 'status_code', 'healthy' is required",
+        }), 400
+
+    since = until = None
+    try:
+        if since_raw is not None:
+            since = _parse_iso8601_arg(since_raw, "since")
+        if until_raw is not None:
+            until = _parse_iso8601_arg(until_raw, "until")
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    if since is not None and until is not None and until < since:
+        return jsonify({"error": "Query parameter 'until' must be greater than or equal to 'since'"}), 400
+
+    status_code: int | None = None
+    if status_code_raw is not None:
+        try:
+            status_code = _parse_status_code_arg(status_code_raw, "status_code")
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+
+    healthy: bool | None = None
+    if healthy_raw is not None:
+        try:
+            healthy = _parse_bool_arg(healthy_raw, "healthy")
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
 
     with records_lock:
-        before_count = len(health_records)
-        health_records[:] = [r for r in health_records if r["endpoint"] != endpoint]
-        deleted_count = before_count - len(health_records)
+        snapshot = list(health_records)
+        matches = _filter_records(snapshot, endpoint, since, until, healthy, status_code)
+        match_ids = {id(r) for r in matches}
+        remaining = [r for r in health_records if id(r) not in match_ids]
+        deleted_count = len(health_records) - len(remaining)
+        health_records[:] = remaining
 
     if deleted_count == 0:
-        logger.info("No records found for deletion: %s", endpoint)
-        return jsonify({"error": "No records found for the specified endpoint"}), 404
+        logger.info(
+            "No records found for delete filters: endpoint=%s since=%s until=%s status_code=%s healthy=%s",
+            endpoint, since_raw, until_raw, status_code_raw, healthy_raw,
+        )
+        return jsonify({"error": "No records found for the specified filters"}), 404
 
-    logger.info("Deleted %d records for endpoint=%s", deleted_count, endpoint)
+    logger.info(
+        "Deleted %d records (endpoint=%s since=%s until=%s status_code=%s healthy=%s)",
+        deleted_count, endpoint, since_raw, until_raw, status_code_raw, healthy_raw,
+    )
     return jsonify({"message": "Records deleted", "deleted_count": deleted_count})
 
 
