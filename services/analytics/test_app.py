@@ -376,6 +376,149 @@ def test_delete_records_missing_param(client):
     assert "endpoint" in data["error"].lower()
 
 
+def test_delete_records_via_json_body():
+    """Gateway proxies DELETE with JSON body; analytics must accept it."""
+    from app import app as _app
+    c = _app.test_client()
+    c.post("/api/v1/records", json={
+        "endpoint": "https://body.example.com", "status_code": 200, "response_time_ms": 10,
+    })
+    resp = c.delete("/api/v1/records", json={"endpoint": "https://body.example.com"})
+    assert resp.status_code == 200
+    assert resp.get_json()["deleted_count"] == 1
+
+
+def test_delete_records_query_takes_precedence_over_body(client):
+    client.post("/api/v1/records", json={
+        "endpoint": "https://qs.example.com", "status_code": 200, "response_time_ms": 10,
+    })
+    client.post("/api/v1/records", json={
+        "endpoint": "https://body.example.com", "status_code": 200, "response_time_ms": 10,
+    })
+    resp = client.delete(
+        "/api/v1/records?endpoint=https://qs.example.com",
+        json={"endpoint": "https://body.example.com"},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["deleted_count"] == 1
+    list_resp = client.get("/api/v1/records")
+    endpoints = [r["endpoint"] for r in list_resp.get_json()["records"]]
+    assert "https://qs.example.com" not in endpoints
+    assert "https://body.example.com" in endpoints
+
+
+def test_delete_records_by_until(client):
+    client.post("/api/v1/records", json={
+        "endpoint": "https://old.com", "status_code": 200, "response_time_ms": 10,
+        "checked_at": "2025-01-01T00:00:00+00:00",
+    })
+    client.post("/api/v1/records", json={
+        "endpoint": "https://new.com", "status_code": 200, "response_time_ms": 10,
+        "checked_at": "2026-06-01T00:00:00+00:00",
+    })
+    resp = client.delete("/api/v1/records?until=2025-12-31T23:59:59%2B00:00")
+    assert resp.status_code == 200
+    assert resp.get_json()["deleted_count"] == 1
+    list_resp = client.get("/api/v1/records")
+    remaining = [r["endpoint"] for r in list_resp.get_json()["records"]]
+    assert remaining == ["https://new.com"]
+
+
+def test_delete_records_by_since(client):
+    client.post("/api/v1/records", json={
+        "endpoint": "https://old.com", "status_code": 200, "response_time_ms": 10,
+        "checked_at": "2025-01-01T00:00:00+00:00",
+    })
+    client.post("/api/v1/records", json={
+        "endpoint": "https://new.com", "status_code": 200, "response_time_ms": 10,
+        "checked_at": "2026-06-01T00:00:00+00:00",
+    })
+    resp = client.delete("/api/v1/records?since=2026-01-01T00:00:00%2B00:00")
+    assert resp.status_code == 200
+    assert resp.get_json()["deleted_count"] == 1
+    list_resp = client.get("/api/v1/records")
+    remaining = [r["endpoint"] for r in list_resp.get_json()["records"]]
+    assert remaining == ["https://old.com"]
+
+
+def test_delete_records_by_status_code(client):
+    client.post("/api/v1/records", json={
+        "endpoint": "https://x.com", "status_code": 500, "response_time_ms": 10,
+    })
+    client.post("/api/v1/records", json={
+        "endpoint": "https://y.com", "status_code": 200, "response_time_ms": 10,
+    })
+    resp = client.delete("/api/v1/records?status_code=500")
+    assert resp.status_code == 200
+    assert resp.get_json()["deleted_count"] == 1
+    list_resp = client.get("/api/v1/records")
+    remaining = [r["status_code"] for r in list_resp.get_json()["records"]]
+    assert remaining == [200]
+
+
+def test_delete_records_by_healthy_false(client):
+    client.post("/api/v1/records", json={
+        "endpoint": "https://up.com", "status_code": 200, "response_time_ms": 10,
+    })
+    client.post("/api/v1/records", json={
+        "endpoint": "https://down.com", "status_code": 503, "response_time_ms": 10,
+    })
+    resp = client.delete("/api/v1/records?healthy=false")
+    assert resp.status_code == 200
+    assert resp.get_json()["deleted_count"] == 1
+    list_resp = client.get("/api/v1/records")
+    remaining = [r["endpoint"] for r in list_resp.get_json()["records"]]
+    assert remaining == ["https://up.com"]
+
+
+def test_delete_records_combined_filters(client):
+    """Records matching ALL filters are deleted."""
+    client.post("/api/v1/records", json={
+        "endpoint": "https://api.com", "status_code": 500, "response_time_ms": 10,
+        "checked_at": "2025-01-01T00:00:00+00:00",
+    })
+    client.post("/api/v1/records", json={
+        "endpoint": "https://api.com", "status_code": 200, "response_time_ms": 10,
+        "checked_at": "2025-01-01T00:00:00+00:00",
+    })
+    client.post("/api/v1/records", json={
+        "endpoint": "https://other.com", "status_code": 500, "response_time_ms": 10,
+        "checked_at": "2025-01-01T00:00:00+00:00",
+    })
+    resp = client.delete(
+        "/api/v1/records?endpoint=https://api.com&status_code=500"
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["deleted_count"] == 1
+
+
+def test_delete_records_invalid_since(client):
+    resp = client.delete("/api/v1/records?since=not-a-date")
+    assert resp.status_code == 400
+    assert "since" in resp.get_json()["error"].lower()
+
+
+def test_delete_records_until_before_since(client):
+    resp = client.delete(
+        "/api/v1/records?since=2026-06-01T00:00:00%2B00:00&until=2025-01-01T00:00:00%2B00:00"
+    )
+    assert resp.status_code == 400
+
+
+def test_delete_records_invalid_status_code(client):
+    resp = client.delete("/api/v1/records?status_code=999")
+    assert resp.status_code == 400
+
+
+def test_delete_records_no_match_404(client):
+    client.post("/api/v1/records", json={
+        "endpoint": "https://existing.com", "status_code": 200, "response_time_ms": 10,
+    })
+    resp = client.delete("/api/v1/records?status_code=404")
+    assert resp.status_code == 404
+    assert "no records found" in resp.get_json()["error"].lower()
+
+
 def test_delete_records_preserves_other_endpoints(client):
     client.post("/api/v1/records", json={"endpoint": "https://a.com", "status_code": 200, "response_time_ms": 10})
     client.post("/api/v1/records", json={"endpoint": "https://b.com", "status_code": 200, "response_time_ms": 20})
