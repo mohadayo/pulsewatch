@@ -213,20 +213,50 @@ describe("Gateway Service", () => {
       expect(res.body.records).toEqual([]);
     });
 
-    it("should reject DELETE /api/v1/records without endpoint", async () => {
+    it("should reject DELETE /api/v1/records with no filters", async () => {
       const res = await request(app)
         .delete("/api/v1/records")
         .send({});
       expect(res.status).toBe(400);
       expect(res.body.error).toContain("endpoint");
+      expect(res.body.error).toContain("since");
+      expect(res.body.error).toContain("until");
     });
 
-    it("should proxy DELETE /api/v1/records", async () => {
+    it("should treat empty string field as missing", async () => {
+      const res = await request(app)
+        .delete("/api/v1/records")
+        .send({ endpoint: "" });
+      expect(res.status).toBe(400);
+    });
+
+    it("should proxy DELETE /api/v1/records by endpoint", async () => {
       const res = await request(app)
         .delete("/api/v1/records")
         .send({ endpoint: "https://example.com" });
       expect(res.status).toBe(200);
       expect(res.body.deleted).toBe(3);
+    });
+
+    it("should proxy DELETE /api/v1/records by until", async () => {
+      const res = await request(app)
+        .delete("/api/v1/records")
+        .send({ until: "2025-01-01T00:00:00Z" });
+      expect(res.status).toBe(200);
+    });
+
+    it("should proxy DELETE /api/v1/records by status_code", async () => {
+      const res = await request(app)
+        .delete("/api/v1/records")
+        .send({ status_code: 500 });
+      expect(res.status).toBe(200);
+    });
+
+    it("should proxy DELETE /api/v1/records by healthy", async () => {
+      const res = await request(app)
+        .delete("/api/v1/records")
+        .send({ healthy: false });
+      expect(res.status).toBe(200);
     });
 
     it("should proxy GET /api/v1/report", async () => {
