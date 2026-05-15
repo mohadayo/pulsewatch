@@ -156,6 +156,29 @@ app.get("/api/v1/records", async (req: Request, res: Response, next: NextFunctio
   }
 });
 
+app.post("/api/v1/records", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if (!body.endpoint) {
+      res.status(400).json({ error: "Field 'endpoint' is required" });
+      return;
+    }
+    if (body.status_code === undefined || body.status_code === null) {
+      res.status(400).json({ error: "Field 'status_code' is required" });
+      return;
+    }
+    if (body.response_time_ms === undefined || body.response_time_ms === null) {
+      res.status(400).json({ error: "Field 'response_time_ms' is required" });
+      return;
+    }
+    const result = await proxyRequest(analyticsUrl(), "/api/v1/records", "POST", body);
+    logger.info(`Forwarded record: endpoint=${String(body.endpoint)} status=${String(body.status_code)}`);
+    res.status(result.status).json(result.data);
+  } catch (err) {
+    next(err);
+  }
+});
+
 const DELETE_FILTER_FIELDS = [
   "endpoint",
   "since",

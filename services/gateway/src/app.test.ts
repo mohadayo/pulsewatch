@@ -161,6 +161,22 @@ describe("Gateway Service", () => {
           if (req.method === "GET" && req.url?.startsWith("/api/v1/records")) {
             res.writeHead(200);
             res.end(JSON.stringify({ records: [], total: 0 }));
+          } else if (req.method === "POST" && req.url === "/api/v1/records") {
+            let body = "";
+            req.on("data", (chunk) => (body += chunk));
+            req.on("end", () => {
+              const data = JSON.parse(body);
+              res.writeHead(201);
+              res.end(
+                JSON.stringify({
+                  endpoint: data.endpoint,
+                  status_code: data.status_code,
+                  response_time_ms: data.response_time_ms,
+                  healthy: data.status_code >= 200 && data.status_code < 400,
+                  checked_at: "2026-01-01T00:00:00+00:00",
+                })
+              );
+            });
           } else if (req.method === "DELETE" && req.url === "/api/v1/records") {
             let body = "";
             req.on("data", (chunk) => (body += chunk));
@@ -211,6 +227,56 @@ describe("Gateway Service", () => {
       const res = await request(app).get("/api/v1/records?endpoint=test&limit=5");
       expect(res.status).toBe(200);
       expect(res.body.records).toEqual([]);
+    });
+
+    it("should proxy POST /api/v1/records", async () => {
+      const res = await request(app)
+        .post("/api/v1/records")
+        .send({
+          endpoint: "https://example.com",
+          status_code: 200,
+          response_time_ms: 42.0,
+        });
+      expect(res.status).toBe(201);
+      expect(res.body.endpoint).toBe("https://example.com");
+      expect(res.body.status_code).toBe(200);
+      expect(res.body.healthy).toBe(true);
+    });
+
+    it("should reject POST /api/v1/records missing endpoint", async () => {
+      const res = await request(app)
+        .post("/api/v1/records")
+        .send({ status_code: 200, response_time_ms: 1 });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain("endpoint");
+    });
+
+    it("should reject POST /api/v1/records missing status_code", async () => {
+      const res = await request(app)
+        .post("/api/v1/records")
+        .send({ endpoint: "https://example.com", response_time_ms: 1 });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain("status_code");
+    });
+
+    it("should reject POST /api/v1/records missing response_time_ms", async () => {
+      const res = await request(app)
+        .post("/api/v1/records")
+        .send({ endpoint: "https://example.com", status_code: 200 });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain("response_time_ms");
+    });
+
+    it("should accept POST /api/v1/records with status_code=0", async () => {
+      const res = await request(app)
+        .post("/api/v1/records")
+        .send({
+          endpoint: "https://example.com",
+          status_code: 0,
+          response_time_ms: 0,
+        });
+      // status_code=0 should not be treated as missing (truthy-falsy guard handled by !== undefined)
+      expect(res.status).not.toBe(400);
     });
 
     it("should reject DELETE /api/v1/records with no filters", async () => {
