@@ -188,6 +188,24 @@ def _parse_status_code_arg(value: str, name: str) -> int:
     return parsed
 
 
+def _parse_response_time_arg(value: str, name: str) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as e:
+        raise ValueError(
+            f"Query parameter '{name}' must be a number"
+        ) from e
+    if not math.isfinite(parsed):
+        raise ValueError(
+            f"Query parameter '{name}' must be a finite number"
+        )
+    if parsed < 0:
+        raise ValueError(
+            f"Query parameter '{name}' must be non-negative"
+        )
+    return parsed
+
+
 def _filter_records(
     records: list[dict],
     endpoint: str | None,
@@ -195,6 +213,8 @@ def _filter_records(
     until: datetime | None,
     healthy: bool | None,
     status_code: int | None = None,
+    min_response_time_ms: float | None = None,
+    max_response_time_ms: float | None = None,
 ) -> list[dict]:
     filtered = records
     if endpoint:
@@ -203,6 +223,16 @@ def _filter_records(
         filtered = [r for r in filtered if bool(r.get("healthy")) == healthy]
     if status_code is not None:
         filtered = [r for r in filtered if r.get("status_code") == status_code]
+    if min_response_time_ms is not None:
+        filtered = [
+            r for r in filtered
+            if r.get("response_time_ms", 0.0) >= min_response_time_ms
+        ]
+    if max_response_time_ms is not None:
+        filtered = [
+            r for r in filtered
+            if r.get("response_time_ms", 0.0) <= max_response_time_ms
+        ]
     if since is not None or until is not None:
         narrowed = []
         for r in filtered:
@@ -227,6 +257,8 @@ def list_records():
     until_raw = request.args.get("until")
     healthy_raw = request.args.get("healthy")
     status_code_raw = request.args.get("status_code")
+    min_rt_raw = request.args.get("min_response_time_ms")
+    max_rt_raw = request.args.get("max_response_time_ms")
 
     if limit_raw is None:
         limit = LIST_DEFAULT_LIMIT
@@ -276,6 +308,32 @@ def list_records():
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
 
+    min_response_time_ms: float | None = None
+    max_response_time_ms: float | None = None
+    try:
+        if min_rt_raw is not None:
+            min_response_time_ms = _parse_response_time_arg(
+                min_rt_raw, "min_response_time_ms",
+            )
+        if max_rt_raw is not None:
+            max_response_time_ms = _parse_response_time_arg(
+                max_rt_raw, "max_response_time_ms",
+            )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    if (
+        min_response_time_ms is not None
+        and max_response_time_ms is not None
+        and max_response_time_ms < min_response_time_ms
+    ):
+        return jsonify({
+            "error": (
+                "Query parameter 'max_response_time_ms' must be "
+                "greater than or equal to 'min_response_time_ms'"
+            ),
+        }), 400
+
     sort_field = request.args.get("sort", "checked_at")
     sort_order = request.args.get("order", "asc")
     if sort_field not in ALLOWED_SORT_FIELDS:
@@ -289,7 +347,11 @@ def list_records():
 
     with records_lock:
         snapshot = list(health_records)
-    filtered = _filter_records(snapshot, endpoint, since, until, healthy, status_code)
+    filtered = _filter_records(
+        snapshot, endpoint, since, until, healthy, status_code,
+        min_response_time_ms=min_response_time_ms,
+        max_response_time_ms=max_response_time_ms,
+    )
 
     reverse = sort_order == "desc"
     filtered.sort(key=lambda r: r.get(sort_field, ""), reverse=reverse)
@@ -393,6 +455,8 @@ def report():
     until_raw = request.args.get("until")
     healthy_raw = request.args.get("healthy")
     status_code_raw = request.args.get("status_code")
+    min_rt_raw = request.args.get("min_response_time_ms")
+    max_rt_raw = request.args.get("max_response_time_ms")
 
     since = until = None
     try:
@@ -420,9 +484,39 @@ def report():
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
 
+    min_response_time_ms: float | None = None
+    max_response_time_ms: float | None = None
+    try:
+        if min_rt_raw is not None:
+            min_response_time_ms = _parse_response_time_arg(
+                min_rt_raw, "min_response_time_ms",
+            )
+        if max_rt_raw is not None:
+            max_response_time_ms = _parse_response_time_arg(
+                max_rt_raw, "max_response_time_ms",
+            )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    if (
+        min_response_time_ms is not None
+        and max_response_time_ms is not None
+        and max_response_time_ms < min_response_time_ms
+    ):
+        return jsonify({
+            "error": (
+                "Query parameter 'max_response_time_ms' must be "
+                "greater than or equal to 'min_response_time_ms'"
+            ),
+        }), 400
+
     with records_lock:
         snapshot = list(health_records)
-    filtered = _filter_records(snapshot, endpoint_filter, since, until, healthy, status_code)
+    filtered = _filter_records(
+        snapshot, endpoint_filter, since, until, healthy, status_code,
+        min_response_time_ms=min_response_time_ms,
+        max_response_time_ms=max_response_time_ms,
+    )
 
     if not filtered:
         return jsonify({"message": "No records available", "endpoints": {}})
