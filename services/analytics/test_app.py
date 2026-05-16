@@ -940,3 +940,131 @@ def test_records_lock_concurrent_writes():
         t.join()
 
     assert len(health_records) == 4 * 40
+
+
+# --- min/max_response_time_ms filter ---
+
+
+def _seed_response_times(client):
+    for rt in [50.0, 150.0, 250.0, 500.0, 1000.0]:
+        client.post("/api/v1/records", json={
+            "endpoint": "https://example.com",
+            "status_code": 200,
+            "response_time_ms": rt,
+        })
+
+
+def test_records_min_response_time_filter(client):
+    _seed_response_times(client)
+    resp = client.get("/api/v1/records?min_response_time_ms=200")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    times = sorted(r["response_time_ms"] for r in data["records"])
+    assert times == [250.0, 500.0, 1000.0]
+
+
+def test_records_max_response_time_filter(client):
+    _seed_response_times(client)
+    resp = client.get("/api/v1/records?max_response_time_ms=200")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    times = sorted(r["response_time_ms"] for r in data["records"])
+    assert times == [50.0, 150.0]
+
+
+def test_records_response_time_range_filter(client):
+    _seed_response_times(client)
+    resp = client.get(
+        "/api/v1/records?min_response_time_ms=100&max_response_time_ms=400"
+    )
+    data = resp.get_json()
+    times = sorted(r["response_time_ms"] for r in data["records"])
+    assert times == [150.0, 250.0]
+
+
+def test_records_response_time_inclusive_boundaries(client):
+    _seed_response_times(client)
+    resp = client.get(
+        "/api/v1/records?min_response_time_ms=150&max_response_time_ms=500"
+    )
+    data = resp.get_json()
+    times = sorted(r["response_time_ms"] for r in data["records"])
+    assert times == [150.0, 250.0, 500.0]
+
+
+def test_records_min_response_time_invalid(client):
+    cases = [
+        "/api/v1/records?min_response_time_ms=abc",
+        "/api/v1/records?min_response_time_ms=-1",
+        "/api/v1/records?min_response_time_ms=inf",
+        "/api/v1/records?min_response_time_ms=nan",
+    ]
+    for url in cases:
+        resp = client.get(url)
+        assert resp.status_code == 400, f"expected 400 for {url}"
+
+
+def test_records_max_response_time_invalid(client):
+    resp = client.get("/api/v1/records?max_response_time_ms=xyz")
+    assert resp.status_code == 400
+
+
+def test_records_max_less_than_min(client):
+    resp = client.get(
+        "/api/v1/records?min_response_time_ms=200&max_response_time_ms=100"
+    )
+    assert resp.status_code == 400
+    assert "max_response_time_ms" in resp.get_json()["error"]
+
+
+def test_records_response_time_combined_with_endpoint(client):
+    client.post("/api/v1/records", json={
+        "endpoint": "https://a.example.com", "status_code": 200, "response_time_ms": 100,
+    })
+    client.post("/api/v1/records", json={
+        "endpoint": "https://a.example.com", "status_code": 200, "response_time_ms": 300,
+    })
+    client.post("/api/v1/records", json={
+        "endpoint": "https://b.example.com", "status_code": 200, "response_time_ms": 300,
+    })
+    resp = client.get(
+        "/api/v1/records?endpoint=https://a.example.com&min_response_time_ms=200"
+    )
+    data = resp.get_json()
+    assert data["total"] == 1
+    assert data["records"][0]["response_time_ms"] == 300
+
+
+def test_report_min_response_time_filter(client):
+    _seed_response_times(client)
+    resp = client.get("/api/v1/report?min_response_time_ms=300")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    ep_data = data["endpoints"]["https://example.com"]
+    assert ep_data["total_checks"] == 2
+    assert ep_data["min_response_time_ms"] == 500.0
+    assert ep_data["max_response_time_ms"] == 1000.0
+
+
+def test_report_response_time_range(client):
+    _seed_response_times(client)
+    resp = client.get(
+        "/api/v1/report?min_response_time_ms=100&max_response_time_ms=600"
+    )
+    data = resp.get_json()
+    ep_data = data["endpoints"]["https://example.com"]
+    assert ep_data["total_checks"] == 3
+    assert ep_data["min_response_time_ms"] == 150.0
+    assert ep_data["max_response_time_ms"] == 500.0
+
+
+def test_report_max_less_than_min_returns_400(client):
+    resp = client.get(
+        "/api/v1/report?min_response_time_ms=500&max_response_time_ms=100"
+    )
+    assert resp.status_code == 400
+
+
+def test_report_response_time_invalid(client):
+    resp = client.get("/api/v1/report?min_response_time_ms=bad")
+    assert resp.status_code == 400
